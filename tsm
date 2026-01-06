@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.6.4'
+VERSION = '1.6.5'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -222,11 +222,10 @@ class TSM
     name_padded = session[:name].ljust(22)
     name_display = selected ? "#{BOLD}#{name_padded}#{RESET}" : name_padded
 
-    # Windows count & age - right aligned
-    win_count = "#{session[:windows]}w".rjust(3)
+    # Age - right aligned
     age_str = age.rjust(5)
 
-    puts "  #{pointer} #{status} #{name_display} #{DIM}#{win_count}  #{age_str}#{RESET}"
+    puts "  #{pointer} #{status} #{name_display} #{DIM}#{age_str}#{RESET}"
   end
 
   def format_age(seconds)

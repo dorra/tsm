@@ -6,11 +6,11 @@ Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
   tsm · v1.6.0 · [2 servers]
 
   ── local ──────────────────────────
-  ❯ ● project-a               3w    now
-    ○ dotfiles                 1w     3d
+  ❯ ● project-a                   now
+    ○ dotfiles                     3d
 
   ── prod [main] ────────────────────
-    ● api-workers              3w     5m
+    ● api-workers                  5m
 
   ↑↓ nav  attach  new  detach  ⌫ del  config  quit
 ```

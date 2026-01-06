@@ -9,7 +9,7 @@ Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
     ○ server                   1w     2h
     ○ dotfiles                 1w     3d
 
-  ↑↓nav  ⏎attach  new  Detach  ⌫del  sremote  Servers  quit
+  ↑↓nav  ⏎attach  new  Detach  ⌫del  remote  Servers  quit
 ```
 
 ## Features
@@ -59,7 +59,7 @@ tsm --help          Show help
 | `n` | New session (local only) |
 | `D` | Detach clients from session |
 | `Backspace` | Delete session |
-| `s` | Toggle remote mode (fetch all servers) |
+| `r` | Toggle remote mode (fetch all servers) |
 | `S` | Open server management |
 | `u` | Update (when available) |
 | `q` | Quit / back to local |
@@ -76,7 +76,7 @@ tsm --help          Show help
 
 ## Remote Mode
 
-Press `s` to fetch sessions from all configured servers:
+Press `r` to fetch sessions from all configured servers:
 
 ```
   tsm · v1.3.0 · [3 servers]
@@ -91,7 +91,7 @@ Press `s` to fetch sessions from all configured servers:
   ── staging ────────────────────────
     ⚠ Connection failed
 
-  ↑↓nav  ⏎attach  Detach  ⌫del  slocal  Servers  quit
+  ↑↓nav  ⏎attach  Detach  ⌫del  rlocal  Servers  quit
 ```
 
 ## Server Configuration

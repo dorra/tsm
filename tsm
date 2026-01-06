@@ -218,7 +218,7 @@ class TSM
         "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
         "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
         "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
-        "#{BOLD}s#{RESET}#{DIM}local#{RESET}",
+        "#{BOLD}r#{RESET}#{DIM}local#{RESET}",
         "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
         "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
       ]
@@ -229,7 +229,7 @@ class TSM
         "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
         "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
         "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
-        "#{BOLD}s#{RESET}#{DIM}remote#{RESET}",
+        "#{BOLD}r#{RESET}#{DIM}emote#{RESET}",
         "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
         "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
       ]
@@ -258,7 +258,7 @@ class TSM
       detach_session(sessions[@selected]) if sessions.any?
     when "\x7f", "\b" # Backspace
       delete_session(sessions[@selected]) if sessions.any?
-    when 's'
+    when 'r'
       toggle_remote_mode
     when 'S'
       @server_mode = true

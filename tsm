@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.5.2'
+VERSION = '1.6.0'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -56,6 +56,8 @@ class TSM
     @server_mode = false
     @server_selected = 0
     @fetch_errors = {}
+    @server_results = {}
+    @pending_threads = {}
   end
 
   def run
@@ -64,12 +66,16 @@ class TSM
     # Trigger background update check if needed
     UpdateChecker.check_async
 
+    # Start parallel fetch for all servers
+    start_async_fetch
+
     loop do
       if @server_mode
         render_server_menu
         handle_server_input
       else
-        @sessions = fetch_all_sessions
+        check_pending_threads
+        @sessions = build_sessions
         render(@sessions)
         handle_input(@sessions)
       end
@@ -77,36 +83,54 @@ class TSM
     end
   end
 
-  def fetch_all_sessions
+  def start_async_fetch
     @fetch_errors = {}
-    all_sessions = []
-    server_results = {}
+    @server_results = {}
+    @pending_threads = {}
 
-    threads = @servers.map do |server|
-      Thread.new do
-        result = RemoteExecutor.fetch_sessions(server)
-        [server, result]
-      end
-    end
-
-    threads.each do |t|
-      server, result = t.value
-      if result[:error]
-        @fetch_errors[server.alias_name] = result[:error]
-      else
-        server_results[server.alias_name] = result[:sessions]
-      end
-    end
-
-    # Build sessions in server order, with placeholders for empty servers
     @servers.each do |server|
-      next if @fetch_errors[server.alias_name]
-      sessions = server_results[server.alias_name] || []
-      if sessions.empty?
-        # Add placeholder for empty server
-        all_sessions << { name: nil, server: server, placeholder: true }
+      @pending_threads[server.alias_name] = Thread.new do
+        RemoteExecutor.fetch_sessions(server)
+      end
+    end
+  end
+
+  def check_pending_threads
+    @pending_threads.each do |alias_name, thread|
+      next unless thread.alive? == false
+      begin
+        result = thread.value
+        if result[:error]
+          @fetch_errors[alias_name] = result[:error]
+        else
+          @server_results[alias_name] = result[:sessions]
+        end
+      rescue => e
+        @fetch_errors[alias_name] = e.message
+      end
+      @pending_threads.delete(alias_name)
+    end
+  end
+
+  def build_sessions
+    all_sessions = []
+
+    @servers.each do |server|
+      alias_name = server.alias_name
+
+      if @pending_threads[alias_name]
+        # Still loading - add loading placeholder
+        all_sessions << { name: nil, server: server, loading: true }
+      elsif @fetch_errors[alias_name]
+        # Error - skip (shown in render)
+        next
       else
-        all_sessions.concat(sessions)
+        sessions = @server_results[alias_name] || []
+        if sessions.empty?
+          all_sessions << { name: nil, server: server, placeholder: true }
+        else
+          all_sessions.concat(sessions)
+        end
       end
     end
 
@@ -162,14 +186,19 @@ class TSM
       server_sessions = sessions.select { |s| s[:server]&.alias_name == server.alias_name }
 
       server_sessions.each do |session|
-        if session[:placeholder]
+        if session[:loading]
+          # Still fetching from server
+          puts "      #{DIM}loading...#{RESET}"
+          current_idx += 1
+        elsif session[:placeholder]
           # Render selectable placeholder for empty server
           pointer = current_idx == @selected ? "#{CYAN}❯#{RESET}" : " "
           puts "  #{pointer}   #{DIM}(no sessions - press n to create)#{RESET}"
+          current_idx += 1
         else
           render_session(session, current_idx == @selected)
+          current_idx += 1
         end
-        current_idx += 1
       end
       puts
     end
@@ -237,15 +266,15 @@ class TSM
       @selected = [@selected - 1, 0].max if sessions.any?
     when 'a', "\r", "\n"
       session = sessions[@selected]
-      attach_session(session) if session && !session[:placeholder]
+      attach_session(session) if session && !session[:placeholder] && !session[:loading]
     when 'n'
       create_session(sessions)
     when 'd'
       session = sessions[@selected]
-      detach_session(session) if session && !session[:placeholder]
+      detach_session(session) if session && !session[:placeholder] && !session[:loading]
     when "\x7f", "\b" # Backspace
       session = sessions[@selected]
-      delete_session(session) if session && !session[:placeholder]
+      delete_session(session) if session && !session[:placeholder] && !session[:loading]
     when 'c'
       @server_mode = true
       @server_selected = 0
@@ -285,6 +314,9 @@ class TSM
   end
 
   def create_session(sessions)
+    # Don't create if selected item is still loading
+    return if sessions.any? && sessions[@selected][:loading]
+
     # Determine target server from current selection
     server = if sessions.any?
       sessions[@selected][:server]
@@ -404,6 +436,7 @@ class TSM
     when 'q', "\u0003"
       @server_mode = false
       @selected = 0
+      start_async_fetch  # Refresh sessions
     end
   end
 

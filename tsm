@@ -1,0 +1,431 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# TSM - Tmux Session Manager
+# Pure Ruby TUI, zero dependencies
+
+VERSION = '1.0.0'
+INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
+CONFIG_DIR = File.expand_path('~/.config/tsm')
+CONFIG_FILE = File.join(CONFIG_DIR, 'config')
+
+UPDATE_URL_DEFAULT = 'https://raw.githubusercontent.com/dorra/tsm/main/tsm'
+
+class TSM
+  CLEAR = "\e[2J\e[H"
+  RESET = "\e[0m"
+  BOLD = "\e[1m"
+  DIM = "\e[2m"
+  GREEN = "\e[32m"
+  YELLOW = "\e[33m"
+  CYAN = "\e[36m"
+  RED = "\e[31m"
+  REVERSE = "\e[7m"
+
+  def initialize
+    @selected = 0
+    @running = true
+  end
+
+  def run
+    check_tmux!
+
+    loop do
+      sessions = fetch_sessions
+      render(sessions)
+      handle_input(sessions)
+      break unless @running
+    end
+  end
+
+  private
+
+  def check_tmux!
+    unless system('which tmux > /dev/null 2>&1')
+      puts "#{RED}Error: tmux nicht gefunden#{RESET}"
+      exit 1
+    end
+  end
+
+  def fetch_sessions
+    format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
+    output = `tmux list-sessions -F '#{format}' 2>/dev/null`
+
+    sessions = output.lines.map do |line|
+      name, windows, status, activity = line.strip.split('|')
+      {
+        name: name,
+        windows: windows.to_i,
+        status: status,
+        activity: activity.to_i
+      }
+    end
+
+    sessions.sort_by { |s| -s[:activity] }
+  end
+
+  def render(sessions)
+    print CLEAR
+    puts "#{BOLD}#{CYAN}  TSM - Tmux Session Manager#{RESET} #{DIM}v#{VERSION}#{RESET}\n\n"
+
+    if sessions.empty?
+      puts "  #{DIM}Keine Sessions vorhanden#{RESET}\n\n"
+    else
+      sessions.each_with_index do |session, idx|
+        render_session(session, idx == @selected)
+      end
+      puts
+    end
+
+    render_help
+  end
+
+  def render_session(session, selected)
+    prefix = selected ? "#{REVERSE}#{BOLD}" : ""
+    suffix = RESET
+
+    status_color = session[:status] == 'attached' ? GREEN : DIM
+    status_icon = session[:status] == 'attached' ? '●' : '○'
+
+    win_label = session[:windows] == 1 ? 'win' : 'wins'
+
+    line = "  #{status_color}#{status_icon}#{RESET} #{prefix}%-20s#{suffix} #{DIM}%2d #{win_label}#{RESET}" % [
+      session[:name],
+      session[:windows]
+    ]
+
+    puts line
+  end
+
+  def render_help
+    puts "#{DIM}─────────────────────────────────#{RESET}"
+    puts "  #{BOLD}j/k#{RESET} #{DIM}navigate#{RESET}  #{BOLD}Enter#{RESET} #{DIM}attach#{RESET}  #{BOLD}n#{RESET} #{DIM}new#{RESET}"
+    puts "  #{BOLD}d#{RESET}   #{DIM}delete#{RESET}    #{BOLD}q#{RESET}     #{DIM}quit#{RESET}"
+  end
+
+  def handle_input(sessions)
+    char = read_char
+
+    case char
+    when 'j', "\e[B"
+      @selected = [@selected + 1, sessions.length - 1].min if sessions.any?
+    when 'k', "\e[A"
+      @selected = [@selected - 1, 0].max if sessions.any?
+    when "\r", "\n"
+      attach_session(sessions[@selected]) if sessions.any?
+    when 'n'
+      create_session
+    when 'd', 'x'
+      delete_session(sessions[@selected]) if sessions.any?
+    when 'q', "\u0003"
+      @running = false
+      print CLEAR
+    end
+  end
+
+  def read_char
+    system('stty raw -echo')
+    char = $stdin.getc
+    if char == "\e"
+      char += $stdin.read_nonblock(2) rescue ''
+    end
+    char
+  ensure
+    system('stty -raw echo')
+  end
+
+  def attach_session(session)
+    return unless session
+    print CLEAR
+
+    if ENV['TMUX']
+      exec("tmux switch-client -t '#{session[:name]}'")
+    else
+      exec("tmux attach -t '#{session[:name]}'")
+    end
+  end
+
+  def create_session
+    print CLEAR
+    print "#{BOLD}Neue Session Name: #{RESET}"
+    system('stty -raw echo')
+    name = $stdin.gets&.strip
+
+    return if name.nil? || name.empty?
+
+    if ENV['TMUX']
+      system("tmux new-session -d -s '#{name}' && tmux switch-client -t '#{name}'")
+    else
+      exec("tmux new-session -s '#{name}'")
+    end
+  end
+
+  def delete_session(session)
+    return unless session
+
+    print CLEAR
+    puts "#{RED}#{BOLD}Session '#{session[:name]}' wirklich löschen?#{RESET}\n\n"
+    puts "  #{DIM}Diese Aktion kann nicht rückgängig gemacht werden.#{RESET}\n\n"
+    print "  #{BOLD}y#{RESET}/#{DIM}n#{RESET}: "
+
+    char = read_char
+
+    if char.downcase == 'y'
+      system("tmux kill-session -t '#{session[:name]}'")
+      @selected = [@selected - 1, 0].max
+    end
+  end
+end
+
+# ─────────────────────────────────────────────────────────────
+# Installation & Update Logic
+# ─────────────────────────────────────────────────────────────
+
+module Installer
+  extend self
+
+  RESET = "\e[0m"
+  BOLD = "\e[1m"
+  DIM = "\e[2m"
+  GREEN = "\e[32m"
+  YELLOW = "\e[33m"
+  CYAN = "\e[36m"
+  RED = "\e[31m"
+
+  def installed?
+    File.exist?(INSTALL_PATH) && File.executable?(INSTALL_PATH)
+  end
+
+  def running_from_install_path?
+    File.realpath($0) == File.realpath(INSTALL_PATH)
+  rescue Errno::ENOENT
+    false
+  end
+
+  def detect_shell
+    shell = ENV['SHELL'] || ''
+    if shell.include?('zsh')
+      { name: 'zsh', rc: File.expand_path('~/.zshrc') }
+    elsif shell.include?('bash')
+      # Prefer .bashrc, fallback to .bash_profile on macOS
+      bashrc = File.expand_path('~/.bashrc')
+      bash_profile = File.expand_path('~/.bash_profile')
+      rc = File.exist?(bashrc) ? bashrc : bash_profile
+      { name: 'bash', rc: rc }
+    else
+      nil
+    end
+  end
+
+  def path_configured?(shell_info)
+    return true unless shell_info
+    return true unless File.exist?(shell_info[:rc])
+
+    content = File.read(shell_info[:rc])
+    content.include?('.local/bin')
+  end
+
+  def install!
+    puts "#{BOLD}#{CYAN}TSM Installation#{RESET}\n\n"
+
+    # Create directories
+    install_dir = File.dirname(INSTALL_PATH)
+    unless Dir.exist?(install_dir)
+      puts "  #{DIM}Erstelle #{install_dir}...#{RESET}"
+      Dir.mkdir(install_dir)
+    end
+
+    # Copy script
+    puts "  #{DIM}Kopiere nach #{INSTALL_PATH}...#{RESET}"
+    source = File.read($0)
+    File.write(INSTALL_PATH, source)
+    File.chmod(0755, INSTALL_PATH)
+
+    # Configure shell
+    shell_info = detect_shell
+    if shell_info && !path_configured?(shell_info)
+      puts "  #{DIM}Konfiguriere #{shell_info[:name]}...#{RESET}"
+      configure_shell(shell_info)
+    end
+
+    # Create config directory
+    unless Dir.exist?(CONFIG_DIR)
+      Dir.mkdir(CONFIG_DIR)
+    end
+
+    puts "\n#{GREEN}#{BOLD}✓ Installation erfolgreich!#{RESET}\n\n"
+
+    if shell_info && !path_configured?(shell_info)
+      puts "  #{YELLOW}Starte eine neue Shell oder führe aus:#{RESET}"
+      puts "  #{BOLD}source #{shell_info[:rc]}#{RESET}\n\n"
+    end
+
+    puts "  Dann einfach: #{BOLD}tsm#{RESET}\n\n"
+  end
+
+  def configure_shell(shell_info)
+    path_line = "\n# TSM - Tmux Session Manager\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"
+
+    File.open(shell_info[:rc], 'a') do |f|
+      f.write(path_line)
+    end
+  end
+
+  def update!
+    puts "#{BOLD}#{CYAN}TSM Update#{RESET}\n\n"
+
+    url = load_update_url
+
+    if url.include?('OWNER')
+      puts "#{RED}Update-URL nicht konfiguriert!#{RESET}\n\n"
+      puts "Bearbeite #{CONFIG_FILE} oder das Script selbst"
+      puts "und setze die GitHub Raw URL.\n\n"
+      puts "Beispiel:"
+      puts "#{DIM}https://raw.githubusercontent.com/deinuser/tsm/main/tsm#{RESET}\n\n"
+      exit 1
+    end
+
+    puts "  #{DIM}Lade von #{url}...#{RESET}"
+
+    # Use curl or ruby's net/http
+    new_content = fetch_url(url)
+
+    unless new_content
+      puts "#{RED}Download fehlgeschlagen!#{RESET}"
+      exit 1
+    end
+
+    # Extract version from new content
+    new_version = new_content.match(/VERSION = '([^']+)'/)&.[](1) || 'unknown'
+
+    if new_version == VERSION
+      puts "\n#{GREEN}Bereits aktuell (v#{VERSION})#{RESET}\n\n"
+      exit 0
+    end
+
+    # Backup current
+    backup_path = "#{INSTALL_PATH}.backup"
+    if installed?
+      puts "  #{DIM}Backup nach #{backup_path}...#{RESET}"
+      File.write(backup_path, File.read(INSTALL_PATH))
+    end
+
+    # Write new version
+    target = installed? ? INSTALL_PATH : $0
+    puts "  #{DIM}Installiere v#{new_version}...#{RESET}"
+    File.write(target, new_content)
+    File.chmod(0755, target)
+
+    puts "\n#{GREEN}#{BOLD}✓ Update erfolgreich!#{RESET}"
+    puts "  #{DIM}v#{VERSION} → v#{new_version}#{RESET}\n\n"
+  end
+
+  def fetch_url(url)
+    # Try curl first (available on macOS/Linux)
+    if system('which curl > /dev/null 2>&1')
+      result = `curl -fsSL '#{url}' 2>/dev/null`
+      return result if $?.success? && !result.empty?
+    end
+
+    # Fallback to ruby net/http
+    require 'net/http'
+    require 'uri'
+
+    uri = URI.parse(url)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = uri.scheme == 'https'
+    http.open_timeout = 10
+    http.read_timeout = 10
+
+    response = http.get(uri.request_uri)
+    response.is_a?(Net::HTTPSuccess) ? response.body : nil
+  rescue => e
+    nil
+  end
+
+  def load_update_url
+    if File.exist?(CONFIG_FILE)
+      config = File.read(CONFIG_FILE)
+      if match = config.match(/^update_url=(.+)$/)
+        return match[1].strip
+      end
+    end
+    UPDATE_URL_DEFAULT
+  end
+
+  def prompt_install
+    puts "#{BOLD}#{CYAN}TSM - Tmux Session Manager#{RESET}\n\n"
+    puts "TSM ist noch nicht installiert.\n\n"
+    print "Jetzt installieren? [#{BOLD}Y#{RESET}/n]: "
+
+    answer = $stdin.gets&.strip&.downcase
+    if answer.empty? || answer == 'y' || answer == 'j'
+      puts
+      install!
+      true
+    else
+      puts "\n#{DIM}OK. Du kannst später installieren mit:#{RESET}"
+      puts "#{BOLD}./tsm --install#{RESET}\n\n"
+      false
+    end
+  end
+
+  def show_version
+    puts "tsm v#{VERSION}"
+    if installed?
+      puts "#{DIM}Installiert: #{INSTALL_PATH}#{RESET}"
+    else
+      puts "#{DIM}Nicht installiert#{RESET}"
+    end
+  end
+
+  def show_help
+    puts <<~HELP
+      #{BOLD}TSM - Tmux Session Manager#{RESET} v#{VERSION}
+
+      #{BOLD}Usage:#{RESET}
+        tsm                 Starte TUI
+        tsm --install       Installiere nach ~/.local/bin
+        tsm --update        Update von GitHub
+        tsm --version       Zeige Version
+        tsm --help          Diese Hilfe
+
+      #{BOLD}TUI Steuerung:#{RESET}
+        j/k, ↑/↓           Navigieren
+        Enter              Session attachen
+        n                  Neue Session
+        d                  Session löschen
+        q                  Beenden
+
+      #{BOLD}Konfiguration:#{RESET}
+        #{CONFIG_FILE}
+        update_url=https://raw.githubusercontent.com/USER/tsm/main/tsm
+    HELP
+  end
+end
+
+# ─────────────────────────────────────────────────────────────
+# Entry Point
+# ─────────────────────────────────────────────────────────────
+
+if __FILE__ == $0
+  trap('INT') { print "\e[2J\e[H"; exit 0 }
+
+  case ARGV[0]
+  when '--install', '-i'
+    Installer.install!
+  when '--update', '-u'
+    Installer.update!
+  when '--version', '-v'
+    Installer.show_version
+  when '--help', '-h'
+    Installer.show_help
+  else
+    # Check if we should prompt for installation
+    unless Installer.installed? || Installer.running_from_install_path?
+      exit 0 unless Installer.prompt_install
+    end
+
+    TSM.new.run
+  end
+end

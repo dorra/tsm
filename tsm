@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.7.1'
+VERSION = '1.7.2'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -410,7 +410,6 @@ class TSM
 
     @servers.each_with_index do |server, idx|
       pointer = idx == @server_selected ? "#{CYAN}❯#{RESET}" : " "
-      main_tag = server.is_main ? " #{YELLOW}[main]#{RESET}" : ""
 
       if server.local?
         target = "localhost"
@@ -419,8 +418,15 @@ class TSM
         target += ":#{server.port}" if server.port && server.port != 22
       end
 
-      name_padded = server.alias_name.ljust(18)
-      puts "  #{pointer} #{name_padded}#{main_tag}  #{DIM}#{target}#{RESET}"
+      # Build display name with [main] tag
+      display = server.alias_name
+      display += " #{YELLOW}[main]#{RESET}" if server.is_main
+      # Pad after ANSI codes (name + 7 for " [main]" or just name)
+      pad_length = server.is_main ? 18 - 7 : 18
+      name_part = server.alias_name.ljust(pad_length)
+      name_display = server.is_main ? "#{name_part} #{YELLOW}[main]#{RESET}" : name_part
+
+      puts "  #{pointer} #{name_display}  #{DIM}#{target}#{RESET}"
     end
 
     puts

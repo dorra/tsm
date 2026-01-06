@@ -96,6 +96,8 @@ tsm --help          Show help
 
 ## Server Configuration
 
+When adding a new server, tsm is automatically installed on it and receives the current config.
+
 Servers are stored in `~/.config/tsm/servers`:
 
 ```

@@ -266,6 +266,8 @@ module UpdateChecker
 
     last_check = File.read(LAST_CHECK_FILE).to_i
     Time.now.to_i - last_check > UPDATE_CHECK_INTERVAL
+  rescue
+    false
   end
 
   def available_version
@@ -273,6 +275,8 @@ module UpdateChecker
 
     version = File.read(AVAILABLE_VERSION_FILE).strip
     version.empty? ? nil : version
+  rescue
+    nil
   end
 
   def check_async
@@ -283,28 +287,25 @@ module UpdateChecker
       check_now
     end
     Process.detach(pid) if pid
-  rescue NotImplementedError
-    # Fork not available (e.g., Windows), check synchronously but quickly
-    Thread.new { check_now }
+  rescue
+    # Fork failed or not available, try thread
+    Thread.new { check_now } rescue nil
   end
 
   def check_now
-    url = load_update_url
-    return if url.include?('OWNER')
+    url = load_update_url rescue nil
+    return if url.nil? || url.include?('OWNER')
 
     content = fetch_url_quick(url)
     return unless content
 
     if match = content.match(/VERSION = '([^']+)'/)
       remote_version = match[1]
-
-      # Save available version
-      File.write(AVAILABLE_VERSION_FILE, remote_version)
+      File.write(AVAILABLE_VERSION_FILE, remote_version) rescue nil
     end
 
-    # Update last check timestamp
-    File.write(LAST_CHECK_FILE, Time.now.to_i.to_s)
-  rescue => e
+    File.write(LAST_CHECK_FILE, Time.now.to_i.to_s) rescue nil
+  rescue
     # Silently fail - don't disrupt user
   end
 
@@ -337,6 +338,8 @@ module UpdateChecker
         return match[1].strip
       end
     end
+    UPDATE_URL_DEFAULT
+  rescue
     UPDATE_URL_DEFAULT
   end
 end
@@ -514,6 +517,8 @@ module Installer
         return match[1].strip
       end
     end
+    UPDATE_URL_DEFAULT
+  rescue
     UPDATE_URL_DEFAULT
   end
 

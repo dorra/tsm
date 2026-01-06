@@ -73,54 +73,79 @@ class TSM
 
   def render(sessions)
     print CLEAR
+    puts
 
-    # Header with optional update notice
-    header = "#{BOLD}#{CYAN}  TSM - Tmux Session Manager#{RESET} #{DIM}v#{VERSION}#{RESET}"
+    # Header - clean and minimal
+    print "  #{BOLD}tsm#{RESET} #{DIM}·#{RESET} "
     if @update_available && @update_available != VERSION
-      header += "  #{YELLOW}[Update: v#{@update_available}]#{RESET}"
+      puts "#{YELLOW}v#{@update_available} available#{RESET} #{DIM}(u to update)#{RESET}"
+    else
+      puts "#{DIM}v#{VERSION}#{RESET}"
     end
-    puts "#{header}\n\n"
+    puts
 
     if sessions.empty?
-      puts "  #{DIM}Keine Sessions vorhanden#{RESET}\n\n"
+      puts "  #{DIM}No sessions#{RESET}"
+      puts
+      puts "  #{DIM}Press#{RESET} #{BOLD}n#{RESET} #{DIM}to create one#{RESET}"
     else
       sessions.each_with_index do |session, idx|
         render_session(session, idx == @selected)
       end
-      puts
     end
 
+    puts
     render_help
   end
 
   def render_session(session, selected)
-    prefix = selected ? "#{REVERSE}#{BOLD}" : ""
-    suffix = RESET
+    now = Time.now.to_i
+    age = format_age(now - session[:activity])
 
-    status_color = session[:status] == 'attached' ? GREEN : DIM
-    status_icon = session[:status] == 'attached' ? '●' : '○'
+    # Selection indicator
+    pointer = selected ? "#{CYAN}❯#{RESET}" : " "
 
-    win_label = session[:windows] == 1 ? 'win' : 'wins'
+    # Status indicator
+    if session[:status] == 'attached'
+      status = "#{GREEN}●#{RESET}"
+    else
+      status = "#{DIM}○#{RESET}"
+    end
 
-    line = "  #{status_color}#{status_icon}#{RESET} #{prefix}%-20s#{suffix} #{DIM}%2d #{win_label}#{RESET}" % [
-      session[:name],
-      session[:windows]
-    ]
+    # Session name - pad first, then apply formatting (ANSI codes don't count for width)
+    name_padded = session[:name].ljust(22)
+    name_display = selected ? "#{BOLD}#{name_padded}#{RESET}" : name_padded
 
-    puts line
+    # Windows count & age - right aligned
+    win_count = "#{session[:windows]}w".rjust(3)
+    age_str = age.rjust(5)
+
+    puts "  #{pointer} #{status} #{name_display} #{DIM}#{win_count}  #{age_str}#{RESET}"
+  end
+
+  def format_age(seconds)
+    case seconds
+    when 0..59 then "now"
+    when 60..3599 then "#{seconds / 60}m"
+    when 3600..86399 then "#{seconds / 3600}h"
+    else "#{seconds / 86400}d"
+    end
   end
 
   def render_help
-    puts "#{DIM}─────────────────────────────────#{RESET}"
-    help_line1 = "  #{BOLD}j/k#{RESET} #{DIM}navigate#{RESET}  #{BOLD}Enter#{RESET} #{DIM}attach#{RESET}  #{BOLD}n#{RESET} #{DIM}new#{RESET}"
-    help_line2 = "  #{BOLD}d#{RESET}   #{DIM}delete#{RESET}    #{BOLD}q#{RESET}     #{DIM}quit#{RESET}"
+    help_parts = [
+      "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
+      "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
+      "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
+      "#{BOLD}d#{RESET}#{DIM}el#{RESET}",
+      "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
+    ]
 
     if @update_available && @update_available != VERSION
-      help_line2 += "    #{BOLD}u#{RESET} #{DIM}update#{RESET}"
+      help_parts.insert(-2, "#{BOLD}u#{RESET}#{DIM}pdate#{RESET}")
     end
 
-    puts help_line1
-    puts help_line2
+    puts "  #{DIM}#{help_parts.join('  ')}#{RESET}"
   end
 
   def handle_input(sessions)

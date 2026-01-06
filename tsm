@@ -137,7 +137,8 @@ class TSM
       "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
       "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
       "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
-      "#{BOLD}d#{RESET}#{DIM}el#{RESET}",
+      "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
+      "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
       "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
     ]
 
@@ -145,7 +146,7 @@ class TSM
       help_parts.insert(-2, "#{BOLD}u#{RESET}#{DIM}pdate#{RESET}")
     end
 
-    puts "  #{DIM}#{help_parts.join('  ')}#{RESET}"
+    puts "  #{help_parts.join('  ')}"
   end
 
   def handle_input(sessions)
@@ -160,7 +161,9 @@ class TSM
       attach_session(sessions[@selected]) if sessions.any?
     when 'n'
       create_session
-    when 'd', 'x'
+    when 'D'
+      detach_session(sessions[@selected]) if sessions.any?
+    when "\x7f", "\b" # Backspace
       delete_session(sessions[@selected]) if sessions.any?
     when 'u'
       run_update if @update_available && @update_available != VERSION
@@ -220,6 +223,22 @@ class TSM
     if char.downcase == 'y'
       system("tmux kill-session -t '#{session[:name]}'")
       @selected = [@selected - 1, 0].max
+    end
+  end
+
+  def detach_session(session)
+    return unless session
+    return unless session[:status] == 'attached'
+
+    print CLEAR
+    puts "#{YELLOW}#{BOLD}Clients von '#{session[:name]}' trennen?#{RESET}\n\n"
+    puts "  #{DIM}Alle verbundenen Clients werden getrennt.#{RESET}\n\n"
+    print "  #{BOLD}y#{RESET}/#{DIM}n#{RESET}: "
+
+    char = read_char
+
+    if char.downcase == 'y'
+      system("tmux detach-client -t '#{session[:name]}'")
     end
   end
 

@@ -53,7 +53,8 @@ tsm --help          Show help
 | `k` / `↑` | Move up |
 | `Enter` | Attach to session |
 | `n` | New session |
-| `d` | Delete session |
+| `D` | Detach clients from session |
+| `Backspace` | Delete session |
 | `u` | Update (when available) |
 | `q` | Quit |
 

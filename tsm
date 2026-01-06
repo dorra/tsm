@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.6.5'
+VERSION = '1.6.6'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -172,10 +172,9 @@ class TSM
     current_idx = 0
 
     @servers.each do |server|
-      # Server separator
+      # Server header
       label = server.display_name
-      separator = "─" * [30 - label.length, 5].max
-      puts "  #{DIM}── #{label} #{separator}#{RESET}"
+      puts "  #{BOLD}#{CYAN}#{label}#{RESET}"
 
       if @fetch_errors[server.alias_name]
         puts "    #{RED}⚠ #{@fetch_errors[server.alias_name]}#{RESET}"

@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.4.0'
+VERSION = '1.4.1'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -87,6 +87,7 @@ class TSM
   def fetch_all_sessions
     @fetch_errors = {}
     all_sessions = []
+    server_results = {}
 
     threads = @servers.map do |server|
       Thread.new do
@@ -100,7 +101,19 @@ class TSM
       if result[:error]
         @fetch_errors[server.alias_name] = result[:error]
       else
-        all_sessions.concat(result[:sessions])
+        server_results[server.alias_name] = result[:sessions]
+      end
+    end
+
+    # Build sessions in server order, with placeholders for empty servers
+    @servers.each do |server|
+      next if @fetch_errors[server.alias_name]
+      sessions = server_results[server.alias_name] || []
+      if sessions.empty?
+        # Add placeholder for empty server
+        all_sessions << { name: nil, server: server, placeholder: true }
+      else
+        all_sessions.concat(sessions)
       end
     end
 
@@ -165,13 +178,15 @@ class TSM
 
       server_sessions = sessions.select { |s| s[:server]&.alias_name == server.alias_name }
 
-      if server_sessions.empty?
-        puts "    #{DIM}No sessions#{RESET}"
-      else
-        server_sessions.each do |session|
+      server_sessions.each do |session|
+        if session[:placeholder]
+          # Render selectable placeholder for empty server
+          pointer = current_idx == @selected ? "#{CYAN}❯#{RESET}" : " "
+          puts "  #{pointer}   #{DIM}(no sessions - press n to create)#{RESET}"
+        else
           render_session(session, current_idx == @selected)
-          current_idx += 1
         end
+        current_idx += 1
       end
       puts
     end
@@ -239,13 +254,16 @@ class TSM
     when 'k', "\e[A"
       @selected = [@selected - 1, 0].max if sessions.any?
     when "\r", "\n"
-      attach_session(sessions[@selected]) if sessions.any?
+      session = sessions[@selected]
+      attach_session(session) if session && !session[:placeholder]
     when 'n'
       create_session(sessions)
     when 'D'
-      detach_session(sessions[@selected]) if sessions.any?
+      session = sessions[@selected]
+      detach_session(session) if session && !session[:placeholder]
     when "\x7f", "\b" # Backspace
-      delete_session(sessions[@selected]) if sessions.any?
+      session = sessions[@selected]
+      delete_session(session) if session && !session[:placeholder]
     when 'r'
       toggle_remote_mode
     when 'S'

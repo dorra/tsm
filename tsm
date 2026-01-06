@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.7.3'
+VERSION = '1.7.4'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -481,15 +481,19 @@ class TSM
     port_str = $stdin.gets&.strip
     port = port_str&.empty? ? 22 : port_str.to_i
 
-    @servers << Server.new(
+    new_server = Server.new(
       alias_name: alias_name,
       host: host,
       user: user,
       port: port,
       is_main: false
     )
+    @servers << new_server
 
     ServerManager.save_servers(@servers)
+
+    # Push config to new server
+    push_config_to_server(new_server)
   end
 
   def delete_server_dialog
@@ -547,19 +551,24 @@ class TSM
   end
 
   def push_config_to_main(main)
+    push_config_to_server(main)
+  end
+
+  def push_config_to_server(server)
+    return if server.local?
     return unless File.exist?(SERVERS_FILE)
 
     local_content = File.read(SERVERS_FILE)
     escaped = local_content.gsub("'", "'\\\\''")
 
-    cmd = RemoteExecutor.build_ssh_command(main,
+    cmd = RemoteExecutor.build_ssh_command(server,
       "mkdir -p ~/.config/tsm && cat > ~/.config/tsm/servers << 'TSMEOF'\n#{escaped}\nTSMEOF")
 
     print CLEAR
-    puts "  #{DIM}Pushing config...#{RESET}"
+    puts "  #{DIM}Pushing config to #{server.alias_name}...#{RESET}"
 
     if system(cmd)
-      puts "\n  #{GREEN}Config pushed to #{main.alias_name}#{RESET}\n"
+      puts "\n  #{GREEN}Config pushed to #{server.alias_name}#{RESET}\n"
     else
       puts "\n  #{RED}Push failed#{RESET}\n"
     end

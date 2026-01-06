@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.3.0'
+VERSION = '1.4.0'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -212,28 +212,16 @@ class TSM
   end
 
   def render_help
-    if @remote_mode
-      help_parts = [
-        "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
-        "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
-        "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
-        "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
-        "#{BOLD}r#{RESET}#{DIM}local#{RESET}",
-        "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
-        "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
-      ]
-    else
-      help_parts = [
-        "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
-        "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
-        "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
-        "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
-        "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
-        "#{BOLD}r#{RESET}#{DIM}emote#{RESET}",
-        "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
-        "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
-      ]
-    end
+    help_parts = [
+      "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
+      "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
+      "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
+      "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
+      "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
+      @remote_mode ? "#{BOLD}r#{RESET}#{DIM}local#{RESET}" : "#{BOLD}r#{RESET}#{DIM}emote#{RESET}",
+      "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
+      "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
+    ]
 
     if @update_available && @update_available != VERSION
       help_parts.insert(-2, "#{BOLD}u#{RESET}#{DIM}pdate#{RESET}")
@@ -253,7 +241,7 @@ class TSM
     when "\r", "\n"
       attach_session(sessions[@selected]) if sessions.any?
     when 'n'
-      create_session unless @remote_mode
+      create_session(sessions)
     when 'D'
       detach_session(sessions[@selected]) if sessions.any?
     when "\x7f", "\b" # Backspace
@@ -308,19 +296,27 @@ class TSM
     end
   end
 
-  def create_session
+  def create_session(sessions)
+    # Determine target server
+    server = if @remote_mode && sessions.any?
+      sessions[@selected][:server]
+    elsif @remote_mode
+      # No sessions, use first server
+      @servers.first
+    else
+      @servers.find(&:local?) || ServerManager::DEFAULT_LOCAL
+    end
+
+    server_info = server && !server.local? ? " on #{CYAN}#{server.alias_name}#{RESET}" : ""
+
     print CLEAR
-    print "#{BOLD}Neue Session Name: #{RESET}"
+    print "#{BOLD}Neue Session#{server_info}: #{RESET}"
     system('stty -raw echo')
     name = $stdin.gets&.strip
 
     return if name.nil? || name.empty?
 
-    if ENV['TMUX']
-      system("tmux new-session -d -s '#{name}' && tmux switch-client -t '#{name}'")
-    else
-      exec("tmux new-session -s '#{name}'")
-    end
+    RemoteExecutor.create_session(server, name)
   end
 
   def delete_session(session)
@@ -668,6 +664,23 @@ module RemoteExecutor
     else
       cmd = build_ssh_command(server, "tmux kill-session -t '#{session_name}'")
       system(cmd)
+    end
+  end
+
+  def create_session(server, session_name)
+    if server.local?
+      if ENV['TMUX']
+        system("tmux new-session -d -s '#{session_name}' && tmux switch-client -t '#{session_name}'")
+      else
+        exec("tmux new-session -s '#{session_name}'")
+      end
+    else
+      # Create remote session and attach via SSH
+      create_cmd = "tmux new-session -d -s '#{session_name}'"
+      cmd = build_ssh_command(server, create_cmd)
+      if system(cmd)
+        remote_attach(server, session_name)
+      end
     end
   end
 

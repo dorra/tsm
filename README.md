@@ -3,7 +3,7 @@
 Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
 
 ```
-  tsm · v1.3.0
+  tsm · v1.4.0
 
   ❯ ● project-a                3w    now
     ○ server                   1w     2h
@@ -56,7 +56,7 @@ tsm --help          Show help
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
 | `Enter` | Attach to session |
-| `n` | New session (local only) |
+| `n` | New session (on current server) |
 | `D` | Detach clients from session |
 | `Backspace` | Delete session |
 | `r` | Toggle remote mode (fetch all servers) |
@@ -79,7 +79,7 @@ tsm --help          Show help
 Press `r` to fetch sessions from all configured servers:
 
 ```
-  tsm · v1.3.0 · [3 servers]
+  tsm · v1.4.0 · [3 servers]
 
   ── local ──────────────────────────
   ❯ ● my-project               5w    2m

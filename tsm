@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.6.2'
+VERSION = '1.6.3'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -425,7 +425,15 @@ class TSM
     end
 
     puts
-    puts "  #{BOLD}a#{RESET}#{DIM}dd#{RESET}  #{BOLD}⌫#{RESET}#{DIM}del#{RESET}  #{BOLD}m#{RESET}#{DIM}ain#{RESET}  #{BOLD}y#{RESET}#{DIM}sync#{RESET}  #{BOLD}q#{RESET}#{DIM}back#{RESET}"
+    help_parts = [
+      "#{BOLD}↑↓#{RESET} #{DIM}nav#{RESET}",
+      "#{CYAN}a#{RESET}#{DIM}dd#{RESET}",
+      "#{BOLD}⌫#{RESET} #{DIM}del#{RESET}",
+      "#{CYAN}m#{RESET}#{DIM}ain#{RESET}",
+      "#{CYAN}y#{RESET}#{DIM}sync#{RESET}",
+      "#{CYAN}q#{RESET}#{DIM}back#{RESET}"
+    ]
+    puts "  #{help_parts.join('  ')}"
   end
 
   def handle_server_input

@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.7.5'
+VERSION = '1.7.6'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -365,6 +365,7 @@ class TSM
         system("tmux kill-session -t '#{session[:name]}'")
       end
       @selected = [@selected - 1, 0].max
+      start_async_fetch  # Refresh session list
     end
   end
 

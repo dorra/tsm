@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.6.6'
+VERSION = '1.7.0'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -651,6 +651,10 @@ module ServerManager
     servers.each { |s| s.is_main = (s.alias_name == alias_name) }
     servers
   end
+
+  def find_by_alias(alias_name)
+    load_servers.find { |s| s.alias_name == alias_name }
+  end
 end
 
 # ─────────────────────────────────────────────────────────────
@@ -719,7 +723,48 @@ module RemoteExecutor
     end
   end
 
+  def list_sessions(server)
+    result = fetch_sessions(server)
+
+    if result[:error]
+      puts "Error: #{result[:error]}"
+      return
+    end
+
+    if result[:sessions].empty?
+      puts "No sessions"
+      return
+    end
+
+    now = Time.now.to_i
+    result[:sessions].each do |s|
+      status = s[:status] == 'attached' ? '●' : '○'
+      age = format_age(now - s[:activity])
+      puts "#{status} #{s[:name].ljust(20)} #{age.rjust(5)}"
+    end
+  end
+
+  def attach_or_create(server, session_name)
+    result = fetch_sessions(server)
+    session_exists = result[:sessions]&.any? { |s| s[:name] == session_name }
+
+    if session_exists
+      attach_session(server, session_name)
+    else
+      create_session(server, session_name)
+    end
+  end
+
   private
+
+  def format_age(seconds)
+    case seconds
+    when 0..59 then "now"
+    when 60..3599 then "#{seconds / 60}m"
+    when 3600..86399 then "#{seconds / 3600}h"
+    else "#{seconds / 86400}d"
+    end
+  end
 
   def fetch_local_sessions(server)
     format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
@@ -1102,27 +1147,30 @@ module Installer
       #{BOLD}TSM - Tmux Session Manager#{RESET} v#{VERSION}
 
       #{BOLD}Usage:#{RESET}
-        tsm                 Starte TUI
-        tsm --install       Installiere nach ~/.local/bin
-        tsm --update        Update von GitHub
-        tsm --check         Prüfe auf Updates
-        tsm --version       Zeige Version
-        tsm --help          Diese Hilfe
+        tsm                      Start TUI
+        tsm <server>             List sessions on server
+        tsm <server> <session>   Attach or create session
 
-      #{BOLD}TUI Steuerung:#{RESET}
-        j/k, ↑/↓           Navigieren
-        Enter              Session attachen
-        n                  Neue Session
-        d                  Session löschen
-        u                  Update installieren (wenn verfügbar)
-        q                  Beenden
+      #{BOLD}Examples:#{RESET}
+        tsm local                List local sessions
+        tsm local dev            Attach/create local 'dev'
+        tsm spacestation         List sessions on spacestation
+        tsm spacestation api     Attach/create 'api' on spacestation
 
-      #{BOLD}Konfiguration:#{RESET}
-        #{CONFIG_FILE}
-        update_url=https://raw.githubusercontent.com/USER/tsm/main/tsm
+      #{BOLD}Options:#{RESET}
+        --install, -i       Install to ~/.local/bin
+        --update, -u        Update from GitHub
+        --check, -c         Check for updates
+        --version, -v       Show version
+        --help, -h          Show this help
 
-      #{BOLD}Auto-Update:#{RESET}
-        Prüft automatisch 1x/Tag auf neue Versionen.
+      #{BOLD}TUI Keys:#{RESET}
+        j/k, ↑/↓    Navigate
+        a/Enter     Attach session
+        n           New session
+        d           Detach session
+        c           Server config
+        q           Quit
     HELP
   end
 
@@ -1158,12 +1206,34 @@ if __FILE__ == $0
     Installer.show_version
   when '--help', '-h'
     Installer.show_help
-  else
-    # Check if we should prompt for installation
+  when nil
+    # No arguments - start TUI
     unless Installer.installed? || Installer.running_from_install_path?
       exit 0 unless Installer.prompt_install
     end
-
     TSM.new.run
+  else
+    # tsm <server> [session]
+    arg = ARGV[0]
+    if arg.start_with?('-')
+      puts "Unknown option: #{arg}"
+      puts "Run 'tsm --help' for usage"
+      exit 1
+    end
+
+    server = ServerManager.find_by_alias(arg)
+    unless server
+      puts "Server '#{arg}' not found"
+      puts "Available servers: #{ServerManager.load_servers.map(&:alias_name).join(', ')}"
+      exit 1
+    end
+
+    if ARGV.length == 1
+      # tsm local / tsm spacestation → list sessions
+      RemoteExecutor.list_sessions(server)
+    else
+      # tsm local dev / tsm spacestation api → attach or create
+      RemoteExecutor.attach_or_create(server, ARGV[1])
+    end
   end
 end

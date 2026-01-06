@@ -42,7 +42,23 @@ On first run, tsm will ask to install itself to `~/.local/bin` and configure you
 ## Usage
 
 ```
-tsm                 Start TUI
+tsm                      Start TUI
+tsm <server>             List sessions on server
+tsm <server> <session>   Attach or create session
+```
+
+### Examples
+
+```bash
+tsm local                # List local sessions
+tsm local dev            # Attach/create local 'dev'
+tsm spacestation         # List sessions on spacestation
+tsm spacestation api     # Attach/create 'api' on spacestation
+```
+
+### Options
+
+```
 tsm --install       Install to ~/.local/bin
 tsm --update        Update from GitHub
 tsm --check         Check for updates

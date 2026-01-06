@@ -60,7 +60,7 @@ tsm spacestation api     # Attach/create 'api' on spacestation
 
 ```
 tsm --install       Install to ~/.local/bin
-tsm --update        Update from GitHub
+tsm --update        Update local + all remote servers
 tsm --check         Check for updates
 tsm --version       Show version
 tsm --help          Show help
@@ -112,6 +112,23 @@ With a main server set, use `y` in server management to:
 - **Pull** config from main server
 
 This enables sharing server configurations across machines.
+
+### Update
+
+`tsm --update` updates tsm locally and on all configured remote servers:
+
+```
+✓ Update erfolgreich!
+  v1.7.8 → v1.7.9
+
+Remote Server Updates
+
+  prod... → v1.7.9
+  staging... aktuell
+  offline... fehlgeschlagen
+```
+
+Errors on individual servers don't stop the update process.
 
 ## Configuration
 

@@ -3,7 +3,7 @@
 Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
 
 ```
-  tsm · v1.5.0 · [2 servers]
+  tsm · v1.5.2 · [2 servers]
 
   ── local ──────────────────────────
   ❯ ● project-a               3w    now

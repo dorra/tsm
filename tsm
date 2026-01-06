@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.7.4'
+VERSION = '1.7.5'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -492,7 +492,8 @@ class TSM
 
     ServerManager.save_servers(@servers)
 
-    # Push config to new server
+    # Ensure tsm is installed on new server, then push config
+    ensure_tsm_on_server(new_server)
     push_config_to_server(new_server)
   end
 
@@ -571,6 +572,33 @@ class TSM
       puts "\n  #{GREEN}Config pushed to #{server.alias_name}#{RESET}\n"
     else
       puts "\n  #{RED}Push failed#{RESET}\n"
+    end
+
+    sleep 1
+  end
+
+  def ensure_tsm_on_server(server)
+    return if server.local?
+
+    # Check if tsm is installed
+    check_cmd = RemoteExecutor.build_ssh_command(server, "test -f ~/.local/bin/tsm && echo installed")
+    result = `#{check_cmd} 2>/dev/null`.strip
+
+    if result == "installed"
+      return  # Already installed
+    end
+
+    print CLEAR
+    puts "  #{DIM}Installing tsm on #{server.alias_name}...#{RESET}"
+
+    # Install tsm on remote server
+    install_cmd = RemoteExecutor.build_ssh_command(server,
+      "mkdir -p ~/.local/bin && curl -fsSL #{UPDATE_URL_DEFAULT} -o ~/.local/bin/tsm && chmod +x ~/.local/bin/tsm")
+
+    if system(install_cmd)
+      puts "\n  #{GREEN}tsm installed on #{server.alias_name}#{RESET}\n"
+    else
+      puts "\n  #{YELLOW}tsm installation failed (optional)#{RESET}\n"
     end
 
     sleep 1

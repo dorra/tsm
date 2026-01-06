@@ -3,13 +3,13 @@
 Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
 
 ```
-  tsm · v1.2.0
+  tsm · v1.3.0
 
   ❯ ● project-a                3w    now
     ○ server                   1w     2h
     ○ dotfiles                 1w     3d
 
-  ↑↓nav  ⏎attach  new  del  quit
+  ↑↓nav  ⏎attach  new  Detach  ⌫del  sremote  Servers  quit
 ```
 
 ## Features
@@ -17,6 +17,8 @@ Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
 - List sessions sorted by last activity
 - Create, attach, delete sessions
 - Visual indicators for attached sessions
+- **Multi-server support** - manage sessions across SSH servers
+- **Server configuration sync** - bidirectional sync with main server
 - Auto-update check (once per day)
 - Self-installing with shell config
 
@@ -47,16 +49,69 @@ tsm --help          Show help
 
 ## Keybindings
 
+### Main View
+
 | Key | Action |
 |-----|--------|
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
 | `Enter` | Attach to session |
-| `n` | New session |
+| `n` | New session (local only) |
 | `D` | Detach clients from session |
 | `Backspace` | Delete session |
+| `s` | Toggle remote mode (fetch all servers) |
+| `S` | Open server management |
 | `u` | Update (when available) |
-| `q` | Quit |
+| `q` | Quit / back to local |
+
+### Server Management (S)
+
+| Key | Action |
+|-----|--------|
+| `a` | Add server |
+| `Backspace` | Remove server |
+| `m` | Set as main server |
+| `y` | Sync config with main |
+| `q` | Back |
+
+## Remote Mode
+
+Press `s` to fetch sessions from all configured servers:
+
+```
+  tsm · v1.3.0 · [3 servers]
+
+  ── local ──────────────────────────
+  ❯ ● my-project               5w    2m
+    ○ dotfiles                 1w   12h
+
+  ── prod [main] ────────────────────
+    ● api-workers              3w    5m
+
+  ── staging ────────────────────────
+    ⚠ Connection failed
+
+  ↑↓nav  ⏎attach  Detach  ⌫del  slocal  Servers  quit
+```
+
+## Server Configuration
+
+Servers are stored in `~/.config/tsm/servers`:
+
+```
+# alias|host|user|port|is_main
+local|||22|false
+prod|prod.example.com|deploy|22|true
+staging|staging.example.com|deploy|2222|false
+```
+
+### Sync
+
+With a main server set, use `y` in server management to:
+- **Push** local config to main server
+- **Pull** config from main server
+
+This enables sharing server configurations across machines.
 
 ## Configuration
 
@@ -70,6 +125,7 @@ update_url=https://raw.githubusercontent.com/dorra/tsm/main/tsm
 
 - Ruby (tested with 2.7+)
 - tmux
+- SSH keys configured for remote servers (no password prompts)
 
 ## License
 

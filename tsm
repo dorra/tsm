@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -13,6 +13,28 @@ AVAILABLE_VERSION_FILE = File.join(CONFIG_DIR, 'available_version')
 
 UPDATE_URL_DEFAULT = 'https://raw.githubusercontent.com/dorra/tsm/main/tsm'
 UPDATE_CHECK_INTERVAL = 86400 # 24 hours in seconds
+SERVERS_FILE = File.join(CONFIG_DIR, 'servers')
+SSH_TIMEOUT = 5
+
+# Server configuration struct
+Server = Struct.new(:alias_name, :host, :user, :port, :is_main, keyword_init: true) do
+  def local?
+    host.nil? || host.empty? || host == 'localhost'
+  end
+
+  def display_name
+    is_main ? "#{alias_name} [main]" : alias_name
+  end
+
+  def ssh_target
+    return nil if local?
+    user && !user.empty? ? "#{user}@#{host}" : host
+  end
+
+  def to_line
+    "#{alias_name}|#{host || ''}|#{user || ''}|#{port || 22}|#{is_main}"
+  end
+end
 
 class TSM
   CLEAR = "\e[2J\e[H"
@@ -29,6 +51,12 @@ class TSM
     @selected = 0
     @running = true
     @update_available = UpdateChecker.available_version
+    @servers = ServerManager.load_servers
+    @sessions = []
+    @server_mode = false
+    @remote_mode = false
+    @server_selected = 0
+    @fetch_errors = {}
   end
 
   def run
@@ -38,11 +66,45 @@ class TSM
     UpdateChecker.check_async
 
     loop do
-      sessions = fetch_sessions
-      render(sessions)
-      handle_input(sessions)
+      if @server_mode
+        render_server_menu
+        handle_server_input
+      else
+        @sessions = @remote_mode ? fetch_all_sessions : fetch_local_sessions
+        render(@sessions)
+        handle_input(@sessions)
+      end
       break unless @running
     end
+  end
+
+  def fetch_local_sessions
+    local_server = @servers.find(&:local?) || ServerManager::DEFAULT_LOCAL
+    result = RemoteExecutor.fetch_sessions(local_server)
+    result[:sessions]
+  end
+
+  def fetch_all_sessions
+    @fetch_errors = {}
+    all_sessions = []
+
+    threads = @servers.map do |server|
+      Thread.new do
+        result = RemoteExecutor.fetch_sessions(server)
+        [server, result]
+      end
+    end
+
+    threads.each do |t|
+      server, result = t.value
+      if result[:error]
+        @fetch_errors[server.alias_name] = result[:error]
+      else
+        all_sessions.concat(result[:sessions])
+      end
+    end
+
+    all_sessions
   end
 
   private
@@ -54,29 +116,15 @@ class TSM
     end
   end
 
-  def fetch_sessions
-    format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
-    output = `tmux list-sessions -F '#{format}' 2>/dev/null`
-
-    sessions = output.lines.map do |line|
-      name, windows, status, activity = line.strip.split('|')
-      {
-        name: name,
-        windows: windows.to_i,
-        status: status,
-        activity: activity.to_i
-      }
-    end
-
-    sessions.sort_by { |s| -s[:activity] }
-  end
-
   def render(sessions)
     print CLEAR
     puts
 
     # Header - clean and minimal
     print "  #{BOLD}tsm#{RESET} #{DIM}·#{RESET} "
+    if @remote_mode
+      print "#{CYAN}[#{@servers.length} servers]#{RESET} "
+    end
     if @update_available && @update_available != VERSION
       puts "#{YELLOW}v#{@update_available} available#{RESET} #{DIM}(u to update)#{RESET}"
     else
@@ -84,7 +132,9 @@ class TSM
     end
     puts
 
-    if sessions.empty?
+    if @remote_mode
+      render_grouped_sessions(sessions)
+    elsif sessions.empty?
       puts "  #{DIM}No sessions#{RESET}"
       puts
       puts "  #{DIM}Press#{RESET} #{BOLD}n#{RESET} #{DIM}to create one#{RESET}"
@@ -96,6 +146,35 @@ class TSM
 
     puts
     render_help
+  end
+
+  def render_grouped_sessions(sessions)
+    current_idx = 0
+
+    @servers.each do |server|
+      # Server separator
+      label = server.display_name
+      separator = "─" * [30 - label.length, 5].max
+      puts "  #{DIM}── #{label} #{separator}#{RESET}"
+
+      if @fetch_errors[server.alias_name]
+        puts "    #{RED}⚠ #{@fetch_errors[server.alias_name]}#{RESET}"
+        puts
+        next
+      end
+
+      server_sessions = sessions.select { |s| s[:server]&.alias_name == server.alias_name }
+
+      if server_sessions.empty?
+        puts "    #{DIM}No sessions#{RESET}"
+      else
+        server_sessions.each do |session|
+          render_session(session, current_idx == @selected)
+          current_idx += 1
+        end
+      end
+      puts
+    end
   end
 
   def render_session(session, selected)
@@ -133,14 +212,28 @@ class TSM
   end
 
   def render_help
-    help_parts = [
-      "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
-      "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
-      "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
-      "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
-      "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
-      "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
-    ]
+    if @remote_mode
+      help_parts = [
+        "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
+        "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
+        "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
+        "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
+        "#{BOLD}s#{RESET}#{DIM}local#{RESET}",
+        "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
+        "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
+      ]
+    else
+      help_parts = [
+        "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
+        "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
+        "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
+        "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
+        "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
+        "#{BOLD}s#{RESET}#{DIM}remote#{RESET}",
+        "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
+        "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
+      ]
+    end
 
     if @update_available && @update_available != VERSION
       help_parts.insert(-2, "#{BOLD}u#{RESET}#{DIM}pdate#{RESET}")
@@ -160,17 +253,32 @@ class TSM
     when "\r", "\n"
       attach_session(sessions[@selected]) if sessions.any?
     when 'n'
-      create_session
+      create_session unless @remote_mode
     when 'D'
       detach_session(sessions[@selected]) if sessions.any?
     when "\x7f", "\b" # Backspace
       delete_session(sessions[@selected]) if sessions.any?
+    when 's'
+      toggle_remote_mode
+    when 'S'
+      @server_mode = true
+      @server_selected = 0
     when 'u'
       run_update if @update_available && @update_available != VERSION
     when 'q', "\u0003"
-      @running = false
-      print CLEAR
+      if @remote_mode
+        @remote_mode = false
+        @selected = 0
+      else
+        @running = false
+        print CLEAR
+      end
     end
+  end
+
+  def toggle_remote_mode
+    @remote_mode = !@remote_mode
+    @selected = 0
   end
 
   def read_char
@@ -186,12 +294,17 @@ class TSM
 
   def attach_session(session)
     return unless session
-    print CLEAR
 
-    if ENV['TMUX']
-      exec("tmux switch-client -t '#{session[:name]}'")
+    server = session[:server]
+    if server && !server.local?
+      RemoteExecutor.attach_session(server, session[:name])
     else
-      exec("tmux attach -t '#{session[:name]}'")
+      print CLEAR
+      if ENV['TMUX']
+        exec("tmux switch-client -t '#{session[:name]}'")
+      else
+        exec("tmux attach -t '#{session[:name]}'")
+      end
     end
   end
 
@@ -213,15 +326,22 @@ class TSM
   def delete_session(session)
     return unless session
 
+    server = session[:server]
+    server_info = server && !server.local? ? " on #{server.alias_name}" : ""
+
     print CLEAR
-    puts "#{RED}#{BOLD}Session '#{session[:name]}' wirklich löschen?#{RESET}\n\n"
+    puts "#{RED}#{BOLD}Session '#{session[:name]}'#{server_info} wirklich löschen?#{RESET}\n\n"
     puts "  #{DIM}Diese Aktion kann nicht rückgängig gemacht werden.#{RESET}\n\n"
     print "  #{BOLD}y#{RESET}/#{DIM}n#{RESET}: "
 
     char = read_char
 
     if char.downcase == 'y'
-      system("tmux kill-session -t '#{session[:name]}'")
+      if server && !server.local?
+        RemoteExecutor.kill_session(server, session[:name])
+      else
+        system("tmux kill-session -t '#{session[:name]}'")
+      end
       @selected = [@selected - 1, 0].max
     end
   end
@@ -230,15 +350,22 @@ class TSM
     return unless session
     return unless session[:status] == 'attached'
 
+    server = session[:server]
+    server_info = server && !server.local? ? " on #{server.alias_name}" : ""
+
     print CLEAR
-    puts "#{YELLOW}#{BOLD}Clients von '#{session[:name]}' trennen?#{RESET}\n\n"
+    puts "#{YELLOW}#{BOLD}Clients von '#{session[:name]}'#{server_info} trennen?#{RESET}\n\n"
     puts "  #{DIM}Alle verbundenen Clients werden getrennt.#{RESET}\n\n"
     print "  #{BOLD}y#{RESET}/#{DIM}n#{RESET}: "
 
     char = read_char
 
     if char.downcase == 'y'
-      system("tmux detach-client -s '#{session[:name]}'")
+      if server && !server.local?
+        RemoteExecutor.detach_session(server, session[:name])
+      else
+        system("tmux detach-client -s '#{session[:name]}'")
+      end
     end
   end
 
@@ -246,6 +373,368 @@ class TSM
     print CLEAR
     Installer.update!
     exit 0
+  end
+
+  # ─────────────────────────────────────────────────────────────
+  # Server Management UI
+  # ─────────────────────────────────────────────────────────────
+
+  def render_server_menu
+    print CLEAR
+    puts
+    puts "  #{BOLD}tsm#{RESET} #{DIM}·#{RESET} Server Management"
+    puts
+
+    @servers.each_with_index do |server, idx|
+      pointer = idx == @server_selected ? "#{CYAN}❯#{RESET}" : " "
+      main_tag = server.is_main ? " #{YELLOW}[main]#{RESET}" : ""
+
+      if server.local?
+        target = "localhost"
+      else
+        target = server.ssh_target || server.host
+        target += ":#{server.port}" if server.port && server.port != 22
+      end
+
+      name_padded = server.alias_name.ljust(18)
+      puts "  #{pointer} #{name_padded}#{main_tag}  #{DIM}#{target}#{RESET}"
+    end
+
+    puts
+    puts "  #{BOLD}a#{RESET}#{DIM}dd#{RESET}  #{BOLD}⌫#{RESET}#{DIM}del#{RESET}  #{BOLD}m#{RESET}#{DIM}ain#{RESET}  #{BOLD}y#{RESET}#{DIM}sync#{RESET}  #{BOLD}q#{RESET}#{DIM}back#{RESET}"
+  end
+
+  def handle_server_input
+    char = read_char
+
+    case char
+    when 'j', "\e[B"
+      @server_selected = [@server_selected + 1, @servers.length - 1].min
+    when 'k', "\e[A"
+      @server_selected = [@server_selected - 1, 0].max
+    when 'a'
+      add_server_dialog
+    when "\x7f", "\b" # Backspace
+      delete_server_dialog
+    when 'm'
+      set_main_server
+    when 'y'
+      sync_servers_dialog
+    when 'q', "\u0003"
+      @server_mode = false
+      @selected = 0
+    end
+  end
+
+  def add_server_dialog
+    print CLEAR
+    puts "  #{BOLD}Add Server#{RESET}\n\n"
+
+    system('stty -raw echo')
+
+    print "  Alias: "
+    alias_name = $stdin.gets&.strip
+    return if alias_name.nil? || alias_name.empty?
+
+    print "  Host:  "
+    host = $stdin.gets&.strip
+    return if host.nil? || host.empty?
+
+    print "  User (optional): "
+    user = $stdin.gets&.strip
+    user = nil if user&.empty?
+
+    print "  Port (default 22): "
+    port_str = $stdin.gets&.strip
+    port = port_str&.empty? ? 22 : port_str.to_i
+
+    @servers << Server.new(
+      alias_name: alias_name,
+      host: host,
+      user: user,
+      port: port,
+      is_main: false
+    )
+
+    ServerManager.save_servers(@servers)
+  end
+
+  def delete_server_dialog
+    return if @servers.length <= 1
+
+    server = @servers[@server_selected]
+    return if server.local? && @servers.count(&:local?) == 1
+
+    print CLEAR
+    puts "  #{RED}#{BOLD}Server '#{server.alias_name}' entfernen?#{RESET}\n\n"
+    print "  #{BOLD}y#{RESET}/#{DIM}n#{RESET}: "
+
+    if read_char.downcase == 'y'
+      @servers.delete_at(@server_selected)
+      @server_selected = [@server_selected - 1, 0].max
+      ServerManager.save_servers(@servers)
+    end
+  end
+
+  def set_main_server
+    server = @servers[@server_selected]
+    return if server.local?
+
+    @servers = ServerManager.set_main(@servers, server.alias_name)
+    ServerManager.save_servers(@servers)
+  end
+
+  def sync_servers_dialog
+    main = ServerManager.main_server(@servers)
+
+    unless main
+      print CLEAR
+      puts "  #{RED}Kein Main-Server konfiguriert#{RESET}\n\n"
+      puts "  #{DIM}Wähle einen Server und drücke 'm' um ihn als Main zu setzen.#{RESET}\n\n"
+      print "  #{DIM}Enter zum Fortfahren...#{RESET}"
+      read_char
+      return
+    end
+
+    print CLEAR
+    puts "  #{BOLD}Sync Server Configuration#{RESET}\n\n"
+    puts "  Main: #{CYAN}#{main.alias_name}#{RESET} (#{main.ssh_target})\n\n"
+    puts "  #{BOLD}p#{RESET} Push local → remote"
+    puts "  #{BOLD}l#{RESET} Pull remote → local"
+    puts "  #{DIM}Esc#{RESET} Cancel\n\n"
+
+    char = read_char
+
+    case char
+    when 'p'
+      push_config_to_main(main)
+    when 'l'
+      pull_config_from_main(main)
+    end
+  end
+
+  def push_config_to_main(main)
+    return unless File.exist?(SERVERS_FILE)
+
+    local_content = File.read(SERVERS_FILE)
+    escaped = local_content.gsub("'", "'\\\\''")
+
+    cmd = RemoteExecutor.build_ssh_command(main,
+      "mkdir -p ~/.config/tsm && cat > ~/.config/tsm/servers << 'TSMEOF'\n#{escaped}\nTSMEOF")
+
+    print CLEAR
+    puts "  #{DIM}Pushing config...#{RESET}"
+
+    if system(cmd)
+      puts "\n  #{GREEN}Config pushed to #{main.alias_name}#{RESET}\n"
+    else
+      puts "\n  #{RED}Push failed#{RESET}\n"
+    end
+
+    sleep 1
+  end
+
+  def pull_config_from_main(main)
+    cmd = RemoteExecutor.build_ssh_command(main, "cat ~/.config/tsm/servers 2>/dev/null")
+
+    print CLEAR
+    puts "  #{DIM}Pulling config...#{RESET}"
+
+    content = `#{cmd}`
+
+    unless $?.success? && !content.strip.empty?
+      puts "\n  #{RED}Pull failed - no config on remote#{RESET}\n"
+      sleep 1
+      return
+    end
+
+    Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
+    File.write(SERVERS_FILE, content)
+    @servers = ServerManager.load_servers
+
+    puts "\n  #{GREEN}Config pulled from #{main.alias_name}#{RESET}\n"
+    sleep 1
+  end
+end
+
+# ─────────────────────────────────────────────────────────────
+# Server Manager (load/save server configuration)
+# ─────────────────────────────────────────────────────────────
+
+module ServerManager
+  extend self
+
+  DEFAULT_LOCAL = Server.new(
+    alias_name: 'local',
+    host: nil,
+    user: nil,
+    port: 22,
+    is_main: false
+  )
+
+  def load_servers
+    return [DEFAULT_LOCAL.dup] unless File.exist?(SERVERS_FILE)
+
+    servers = []
+    File.readlines(SERVERS_FILE).each do |line|
+      line = line.strip
+      next if line.empty? || line.start_with?('#')
+
+      parts = line.split('|')
+      next if parts.length < 2
+
+      servers << Server.new(
+        alias_name: parts[0],
+        host: parts[1]&.empty? ? nil : parts[1],
+        user: parts[2]&.empty? ? nil : parts[2],
+        port: (parts[3] || 22).to_i,
+        is_main: parts[4] == 'true'
+      )
+    end
+
+    servers.empty? ? [DEFAULT_LOCAL.dup] : servers
+  rescue
+    [DEFAULT_LOCAL.dup]
+  end
+
+  def save_servers(servers)
+    Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
+
+    content = "# TSM Server Configuration\n"
+    content += "# Format: alias|host|user|port|is_main\n\n"
+
+    servers.each do |s|
+      content += "#{s.to_line}\n"
+    end
+
+    File.write(SERVERS_FILE, content)
+  rescue
+    # Silently fail
+  end
+
+  def main_server(servers)
+    servers.find(&:is_main)
+  end
+
+  def set_main(servers, alias_name)
+    servers.each { |s| s.is_main = (s.alias_name == alias_name) }
+    servers
+  end
+end
+
+# ─────────────────────────────────────────────────────────────
+# Remote Executor (SSH commands for remote tmux)
+# ─────────────────────────────────────────────────────────────
+
+module RemoteExecutor
+  extend self
+
+  def fetch_sessions(server)
+    if server.local?
+      fetch_local_sessions(server)
+    else
+      fetch_remote_sessions(server)
+    end
+  end
+
+  def build_ssh_command(server, remote_cmd)
+    opts = "-o ConnectTimeout=#{SSH_TIMEOUT} -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+    port_opt = server.port && server.port != 22 ? "-p #{server.port}" : ""
+    target = server.ssh_target
+
+    "ssh #{opts} #{port_opt} #{target} '#{remote_cmd}'"
+  end
+
+  def attach_session(server, session_name)
+    if server.local?
+      local_attach(session_name)
+    else
+      remote_attach(server, session_name)
+    end
+  end
+
+  def detach_session(server, session_name)
+    if server.local?
+      system("tmux detach-client -s '#{session_name}'")
+    else
+      cmd = build_ssh_command(server, "tmux detach-client -s '#{session_name}'")
+      system(cmd)
+    end
+  end
+
+  def kill_session(server, session_name)
+    if server.local?
+      system("tmux kill-session -t '#{session_name}'")
+    else
+      cmd = build_ssh_command(server, "tmux kill-session -t '#{session_name}'")
+      system(cmd)
+    end
+  end
+
+  private
+
+  def fetch_local_sessions(server)
+    format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
+    output = `tmux list-sessions -F '#{format}' 2>/dev/null`
+
+    sessions = output.lines.map do |line|
+      name, windows, status, activity = line.strip.split('|')
+      {
+        name: name,
+        windows: windows.to_i,
+        status: status,
+        activity: activity.to_i,
+        server: server
+      }
+    end
+
+    { error: nil, sessions: sessions.sort_by { |s| -s[:activity] } }
+  rescue => e
+    { error: e.message, sessions: [] }
+  end
+
+  def fetch_remote_sessions(server)
+    format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
+    cmd = build_ssh_command(server, "tmux list-sessions -F '#{format}' 2>/dev/null")
+
+    output = `timeout #{SSH_TIMEOUT} #{cmd} 2>/dev/null`
+
+    unless $?.success?
+      return { error: "Connection failed", sessions: [] }
+    end
+
+    sessions = output.lines.map do |line|
+      name, windows, status, activity = line.strip.split('|')
+      {
+        name: name,
+        windows: windows.to_i,
+        status: status,
+        activity: activity.to_i,
+        server: server
+      }
+    end
+
+    { error: nil, sessions: sessions.sort_by { |s| -s[:activity] } }
+  rescue => e
+    { error: e.message, sessions: [] }
+  end
+
+  def local_attach(session_name)
+    print "\e[2J\e[H"
+    if ENV['TMUX']
+      exec("tmux switch-client -t '#{session_name}'")
+    else
+      exec("tmux attach -t '#{session_name}'")
+    end
+  end
+
+  def remote_attach(server, session_name)
+    print "\e[2J\e[H"
+    opts = "-o StrictHostKeyChecking=accept-new"
+    port_opt = server.port && server.port != 22 ? "-p #{server.port}" : ""
+    target = server.ssh_target
+
+    exec("ssh #{opts} #{port_opt} -t #{target} 'tmux attach -t \"#{session_name}\"'")
   end
 end
 

@@ -70,11 +70,13 @@ tsm --help          Show help
 
 | Key | Action |
 |-----|--------|
+| `j` / `↓` | Move down |
+| `k` / `↑` | Move up |
 | `a` | Add server |
 | `Backspace` | Remove server |
 | `m` | Set as main server |
-| `y` | Sync config with main |
-| `q` | Back |
+| `s` | Sync config with main |
+| `b` | Back |
 
 ## Server Configuration
 

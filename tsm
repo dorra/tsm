@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.6.1'
+VERSION = '1.6.2'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -257,7 +257,11 @@ class TSM
   end
 
   def handle_input(sessions)
-    char = read_char
+    # Use timeout if still loading, so UI can refresh
+    timeout = @pending_threads.any? ? 0.3 : nil
+    char = read_char(timeout)
+
+    return unless char  # No input, just refresh
 
     case char
     when 'j', "\e[B"
@@ -286,8 +290,15 @@ class TSM
     end
   end
 
-  def read_char
+  def read_char(timeout = nil)
     system('stty raw -echo')
+
+    if timeout
+      # Non-blocking read with timeout
+      ready = IO.select([$stdin], nil, nil, timeout)
+      return nil unless ready
+    end
+
     char = $stdin.getc
     if char == "\e"
       char += $stdin.read_nonblock(2) rescue ''

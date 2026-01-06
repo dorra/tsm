@@ -4,12 +4,15 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
+LAST_CHECK_FILE = File.join(CONFIG_DIR, 'last_check')
+AVAILABLE_VERSION_FILE = File.join(CONFIG_DIR, 'available_version')
 
 UPDATE_URL_DEFAULT = 'https://raw.githubusercontent.com/dorra/tsm/main/tsm'
+UPDATE_CHECK_INTERVAL = 86400 # 24 hours in seconds
 
 class TSM
   CLEAR = "\e[2J\e[H"
@@ -25,10 +28,14 @@ class TSM
   def initialize
     @selected = 0
     @running = true
+    @update_available = UpdateChecker.available_version
   end
 
   def run
     check_tmux!
+
+    # Trigger background update check if needed
+    UpdateChecker.check_async
 
     loop do
       sessions = fetch_sessions
@@ -66,7 +73,13 @@ class TSM
 
   def render(sessions)
     print CLEAR
-    puts "#{BOLD}#{CYAN}  TSM - Tmux Session Manager#{RESET} #{DIM}v#{VERSION}#{RESET}\n\n"
+
+    # Header with optional update notice
+    header = "#{BOLD}#{CYAN}  TSM - Tmux Session Manager#{RESET} #{DIM}v#{VERSION}#{RESET}"
+    if @update_available && @update_available != VERSION
+      header += "  #{YELLOW}[Update: v#{@update_available}]#{RESET}"
+    end
+    puts "#{header}\n\n"
 
     if sessions.empty?
       puts "  #{DIM}Keine Sessions vorhanden#{RESET}\n\n"
@@ -99,8 +112,15 @@ class TSM
 
   def render_help
     puts "#{DIM}─────────────────────────────────#{RESET}"
-    puts "  #{BOLD}j/k#{RESET} #{DIM}navigate#{RESET}  #{BOLD}Enter#{RESET} #{DIM}attach#{RESET}  #{BOLD}n#{RESET} #{DIM}new#{RESET}"
-    puts "  #{BOLD}d#{RESET}   #{DIM}delete#{RESET}    #{BOLD}q#{RESET}     #{DIM}quit#{RESET}"
+    help_line1 = "  #{BOLD}j/k#{RESET} #{DIM}navigate#{RESET}  #{BOLD}Enter#{RESET} #{DIM}attach#{RESET}  #{BOLD}n#{RESET} #{DIM}new#{RESET}"
+    help_line2 = "  #{BOLD}d#{RESET}   #{DIM}delete#{RESET}    #{BOLD}q#{RESET}     #{DIM}quit#{RESET}"
+
+    if @update_available && @update_available != VERSION
+      help_line2 += "    #{BOLD}u#{RESET} #{DIM}update#{RESET}"
+    end
+
+    puts help_line1
+    puts help_line2
   end
 
   def handle_input(sessions)
@@ -117,6 +137,8 @@ class TSM
       create_session
     when 'd', 'x'
       delete_session(sessions[@selected]) if sessions.any?
+    when 'u'
+      run_update if @update_available && @update_available != VERSION
     when 'q', "\u0003"
       @running = false
       print CLEAR
@@ -175,6 +197,104 @@ class TSM
       @selected = [@selected - 1, 0].max
     end
   end
+
+  def run_update
+    print CLEAR
+    Installer.update!
+    exit 0
+  end
+end
+
+# ─────────────────────────────────────────────────────────────
+# Update Checker (background, max once per day)
+# ─────────────────────────────────────────────────────────────
+
+module UpdateChecker
+  extend self
+
+  def should_check?
+    return false unless File.exist?(INSTALL_PATH) # Only check if installed
+
+    # Ensure config dir exists
+    Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
+
+    return true unless File.exist?(LAST_CHECK_FILE)
+
+    last_check = File.read(LAST_CHECK_FILE).to_i
+    Time.now.to_i - last_check > UPDATE_CHECK_INTERVAL
+  end
+
+  def available_version
+    return nil unless File.exist?(AVAILABLE_VERSION_FILE)
+
+    version = File.read(AVAILABLE_VERSION_FILE).strip
+    version.empty? ? nil : version
+  end
+
+  def check_async
+    return unless should_check?
+
+    # Fork to check in background (non-blocking)
+    pid = Process.fork do
+      check_now
+    end
+    Process.detach(pid) if pid
+  rescue NotImplementedError
+    # Fork not available (e.g., Windows), check synchronously but quickly
+    Thread.new { check_now }
+  end
+
+  def check_now
+    url = load_update_url
+    return if url.include?('OWNER')
+
+    content = fetch_url_quick(url)
+    return unless content
+
+    if match = content.match(/VERSION = '([^']+)'/)
+      remote_version = match[1]
+
+      # Save available version
+      File.write(AVAILABLE_VERSION_FILE, remote_version)
+    end
+
+    # Update last check timestamp
+    File.write(LAST_CHECK_FILE, Time.now.to_i.to_s)
+  rescue => e
+    # Silently fail - don't disrupt user
+  end
+
+  def fetch_url_quick(url)
+    # Quick fetch with short timeout for background check
+    if system('which curl > /dev/null 2>&1')
+      result = `curl -fsSL --connect-timeout 3 --max-time 5 '#{url}' 2>/dev/null`
+      return result if $?.success? && !result.empty?
+    end
+
+    require 'net/http'
+    require 'uri'
+
+    uri = URI.parse(url)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = uri.scheme == 'https'
+    http.open_timeout = 3
+    http.read_timeout = 5
+
+    response = http.get(uri.request_uri)
+    response.is_a?(Net::HTTPSuccess) ? response.body : nil
+  rescue => e
+    nil
+  end
+
+  def load_update_url
+    if File.exist?(CONFIG_FILE)
+      config = File.read(CONFIG_FILE)
+      if match = config.match(/^update_url=(.+)$/)
+        return match[1].strip
+      end
+    end
+    UPDATE_URL_DEFAULT
+  end
 end
 
 # ─────────────────────────────────────────────────────────────
@@ -207,7 +327,6 @@ module Installer
     if shell.include?('zsh')
       { name: 'zsh', rc: File.expand_path('~/.zshrc') }
     elsif shell.include?('bash')
-      # Prefer .bashrc, fallback to .bash_profile on macOS
       bashrc = File.expand_path('~/.bashrc')
       bash_profile = File.expand_path('~/.bash_profile')
       rc = File.exist?(bashrc) ? bashrc : bash_profile
@@ -287,7 +406,6 @@ module Installer
 
     puts "  #{DIM}Lade von #{url}...#{RESET}"
 
-    # Use curl or ruby's net/http
     new_content = fetch_url(url)
 
     unless new_content
@@ -295,11 +413,12 @@ module Installer
       exit 1
     end
 
-    # Extract version from new content
     new_version = new_content.match(/VERSION = '([^']+)'/)&.[](1) || 'unknown'
 
     if new_version == VERSION
       puts "\n#{GREEN}Bereits aktuell (v#{VERSION})#{RESET}\n\n"
+      # Clear available version cache
+      File.delete(AVAILABLE_VERSION_FILE) if File.exist?(AVAILABLE_VERSION_FILE)
       exit 0
     end
 
@@ -316,18 +435,19 @@ module Installer
     File.write(target, new_content)
     File.chmod(0755, target)
 
+    # Clear available version cache
+    File.delete(AVAILABLE_VERSION_FILE) if File.exist?(AVAILABLE_VERSION_FILE)
+
     puts "\n#{GREEN}#{BOLD}✓ Update erfolgreich!#{RESET}"
     puts "  #{DIM}v#{VERSION} → v#{new_version}#{RESET}\n\n"
   end
 
   def fetch_url(url)
-    # Try curl first (available on macOS/Linux)
     if system('which curl > /dev/null 2>&1')
       result = `curl -fsSL '#{url}' 2>/dev/null`
       return result if $?.success? && !result.empty?
     end
 
-    # Fallback to ruby net/http
     require 'net/http'
     require 'uri'
 
@@ -377,6 +497,11 @@ module Installer
     else
       puts "#{DIM}Nicht installiert#{RESET}"
     end
+
+    available = UpdateChecker.available_version
+    if available && available != VERSION
+      puts "#{YELLOW}Update verfügbar: v#{available}#{RESET}"
+    end
   end
 
   def show_help
@@ -387,6 +512,7 @@ module Installer
         tsm                 Starte TUI
         tsm --install       Installiere nach ~/.local/bin
         tsm --update        Update von GitHub
+        tsm --check         Prüfe auf Updates
         tsm --version       Zeige Version
         tsm --help          Diese Hilfe
 
@@ -395,12 +521,29 @@ module Installer
         Enter              Session attachen
         n                  Neue Session
         d                  Session löschen
+        u                  Update installieren (wenn verfügbar)
         q                  Beenden
 
       #{BOLD}Konfiguration:#{RESET}
         #{CONFIG_FILE}
         update_url=https://raw.githubusercontent.com/USER/tsm/main/tsm
+
+      #{BOLD}Auto-Update:#{RESET}
+        Prüft automatisch 1x/Tag auf neue Versionen.
     HELP
+  end
+
+  def check_update_manual
+    puts "#{BOLD}Prüfe auf Updates...#{RESET}\n"
+    UpdateChecker.check_now
+
+    available = UpdateChecker.available_version
+    if available && available != VERSION
+      puts "#{GREEN}Update verfügbar: v#{VERSION} → v#{available}#{RESET}"
+      puts "#{DIM}Installieren mit: tsm --update#{RESET}"
+    else
+      puts "#{GREEN}Bereits aktuell (v#{VERSION})#{RESET}"
+    end
   end
 end
 
@@ -416,6 +559,8 @@ if __FILE__ == $0
     Installer.install!
   when '--update', '-u'
     Installer.update!
+  when '--check', '-c'
+    Installer.check_update_manual
   when '--version', '-v'
     Installer.show_version
   when '--help', '-h'

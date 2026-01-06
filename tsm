@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.7.7'
+VERSION = '1.7.8'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -354,7 +354,7 @@ class TSM
     print CLEAR
     puts "#{RED}#{BOLD}Session '#{session[:name]}'#{server_info} wirklich löschen?#{RESET}\n\n"
     puts "  #{DIM}Diese Aktion kann nicht rückgängig gemacht werden.#{RESET}\n\n"
-    print "  #{BOLD}y#{RESET}/#{DIM}n#{RESET}: "
+    print "  #{CYAN}y#{RESET}/#{DIM}n#{RESET}: "
 
     char = read_char
 
@@ -379,7 +379,7 @@ class TSM
     print CLEAR
     puts "#{YELLOW}#{BOLD}Clients von '#{session[:name]}'#{server_info} trennen?#{RESET}\n\n"
     puts "  #{DIM}Alle verbundenen Clients werden getrennt.#{RESET}\n\n"
-    print "  #{BOLD}y#{RESET}/#{DIM}n#{RESET}: "
+    print "  #{CYAN}y#{RESET}/#{DIM}n#{RESET}: "
 
     char = read_char
 
@@ -506,7 +506,7 @@ class TSM
 
     print CLEAR
     puts "  #{RED}#{BOLD}Server '#{server.alias_name}' entfernen?#{RESET}\n\n"
-    print "  #{BOLD}y#{RESET}/#{DIM}n#{RESET}: "
+    print "  #{CYAN}y#{RESET}/#{DIM}n#{RESET}: "
 
     if read_char.downcase == 'y'
       @servers.delete_at(@server_selected)
@@ -1095,6 +1095,8 @@ module Installer
       puts "\n#{GREEN}Bereits aktuell (v#{VERSION})#{RESET}\n\n"
       # Clear available version cache
       File.delete(AVAILABLE_VERSION_FILE) if File.exist?(AVAILABLE_VERSION_FILE)
+      # Still update remote servers
+      update_remote_servers!
       exit 0
     end
 
@@ -1116,6 +1118,55 @@ module Installer
 
     puts "\n#{GREEN}#{BOLD}✓ Update erfolgreich!#{RESET}"
     puts "  #{DIM}v#{VERSION} → v#{new_version}#{RESET}\n\n"
+
+    # Update on all remote servers
+    update_remote_servers!
+  end
+
+  def update_remote_servers!
+    servers = ServerManager.load_servers.reject(&:local?)
+    return if servers.empty?
+
+    puts "#{BOLD}Remote Server Updates#{RESET}\n\n"
+
+    servers.each do |server|
+      print "  #{server.alias_name}... "
+
+      begin
+        # Check if tsm is installed
+        check_cmd = RemoteExecutor.build_ssh_command(server, "test -f ~/.local/bin/tsm && echo ok")
+        result = `#{check_cmd} 2>/dev/null`.strip
+
+        unless result == "ok"
+          puts "#{YELLOW}tsm nicht installiert#{RESET}"
+          next
+        end
+
+        # Run update on remote
+        update_cmd = RemoteExecutor.build_ssh_command(server, "~/.local/bin/tsm --update 2>&1")
+        output = `#{update_cmd} 2>&1`
+        status = $?.success?
+
+        if status
+          # Extract version info from output
+          if output.include?("Bereits aktuell")
+            puts "#{GREEN}aktuell#{RESET}"
+          elsif output.include?("Update erfolgreich")
+            version_match = output.match(/v[\d.]+ → v([\d.]+)/)
+            new_ver = version_match ? version_match[1] : "?"
+            puts "#{GREEN}→ v#{new_ver}#{RESET}"
+          else
+            puts "#{GREEN}ok#{RESET}"
+          end
+        else
+          puts "#{RED}fehlgeschlagen#{RESET}"
+        end
+      rescue => e
+        puts "#{RED}Fehler: #{e.message[0..30]}#{RESET}"
+      end
+    end
+
+    puts
   end
 
   def fetch_url(url)

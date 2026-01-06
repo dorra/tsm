@@ -694,25 +694,32 @@ module RemoteExecutor
   end
 
   def fetch_remote_sessions(server)
-    format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
-    cmd = build_ssh_command(server, "tmux list-sessions -F '#{format}' 2>/dev/null")
+    # First check if SSH connection works
+    test_cmd = build_ssh_command(server, "echo ok")
+    test_output = `timeout #{SSH_TIMEOUT} #{test_cmd} 2>/dev/null`
 
-    output = `timeout #{SSH_TIMEOUT} #{cmd} 2>/dev/null`
-
-    unless $?.success?
+    unless $?.success? && test_output.strip == "ok"
       return { error: "Connection failed", sessions: [] }
     end
 
+    # Now fetch sessions
+    format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
+    cmd = build_ssh_command(server, "tmux list-sessions -F '#{format}' 2>/dev/null || true")
+
+    output = `timeout #{SSH_TIMEOUT} #{cmd} 2>/dev/null`
+
     sessions = output.lines.map do |line|
-      name, windows, status, activity = line.strip.split('|')
+      parts = line.strip.split('|')
+      next if parts.length < 4
+
       {
-        name: name,
-        windows: windows.to_i,
-        status: status,
-        activity: activity.to_i,
+        name: parts[0],
+        windows: parts[1].to_i,
+        status: parts[2],
+        activity: parts[3].to_i,
         server: server
       }
-    end
+    end.compact
 
     { error: nil, sessions: sessions.sort_by { |s| -s[:activity] } }
   rescue => e

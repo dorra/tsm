@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.4.1'
+VERSION = '1.5.0'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -54,7 +54,6 @@ class TSM
     @servers = ServerManager.load_servers
     @sessions = []
     @server_mode = false
-    @remote_mode = false
     @server_selected = 0
     @fetch_errors = {}
   end
@@ -70,18 +69,12 @@ class TSM
         render_server_menu
         handle_server_input
       else
-        @sessions = @remote_mode ? fetch_all_sessions : fetch_local_sessions
+        @sessions = fetch_all_sessions
         render(@sessions)
         handle_input(@sessions)
       end
       break unless @running
     end
-  end
-
-  def fetch_local_sessions
-    local_server = @servers.find(&:local?) || ServerManager::DEFAULT_LOCAL
-    result = RemoteExecutor.fetch_sessions(local_server)
-    result[:sessions]
   end
 
   def fetch_all_sessions
@@ -135,7 +128,7 @@ class TSM
 
     # Header - clean and minimal
     print "  #{BOLD}tsm#{RESET} #{DIM}·#{RESET} "
-    if @remote_mode
+    if @servers.length > 1
       print "#{CYAN}[#{@servers.length} servers]#{RESET} "
     end
     if @update_available && @update_available != VERSION
@@ -145,17 +138,7 @@ class TSM
     end
     puts
 
-    if @remote_mode
-      render_grouped_sessions(sessions)
-    elsif sessions.empty?
-      puts "  #{DIM}No sessions#{RESET}"
-      puts
-      puts "  #{DIM}Press#{RESET} #{BOLD}n#{RESET} #{DIM}to create one#{RESET}"
-    else
-      sessions.each_with_index do |session, idx|
-        render_session(session, idx == @selected)
-      end
-    end
+    render_grouped_sessions(sessions)
 
     puts
     render_help
@@ -233,7 +216,6 @@ class TSM
       "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
       "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
       "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
-      @remote_mode ? "#{BOLD}r#{RESET}#{DIM}local#{RESET}" : "#{BOLD}r#{RESET}#{DIM}emote#{RESET}",
       "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
       "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
     ]
@@ -264,27 +246,15 @@ class TSM
     when "\x7f", "\b" # Backspace
       session = sessions[@selected]
       delete_session(session) if session && !session[:placeholder]
-    when 'r'
-      toggle_remote_mode
     when 'S'
       @server_mode = true
       @server_selected = 0
     when 'u'
       run_update if @update_available && @update_available != VERSION
     when 'q', "\u0003"
-      if @remote_mode
-        @remote_mode = false
-        @selected = 0
-      else
-        @running = false
-        print CLEAR
-      end
+      @running = false
+      print CLEAR
     end
-  end
-
-  def toggle_remote_mode
-    @remote_mode = !@remote_mode
-    @selected = 0
   end
 
   def read_char
@@ -315,14 +285,11 @@ class TSM
   end
 
   def create_session(sessions)
-    # Determine target server
-    server = if @remote_mode && sessions.any?
+    # Determine target server from current selection
+    server = if sessions.any?
       sessions[@selected][:server]
-    elsif @remote_mode
-      # No sessions, use first server
-      @servers.first
     else
-      @servers.find(&:local?) || ServerManager::DEFAULT_LOCAL
+      @servers.first
     end
 
     server_info = server && !server.local? ? " on #{CYAN}#{server.alias_name}#{RESET}" : ""

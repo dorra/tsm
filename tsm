@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.5.0'
+VERSION = '1.5.1'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -211,17 +211,17 @@ class TSM
 
   def render_help
     help_parts = [
-      "#{BOLD}↑↓#{RESET}#{DIM}nav#{RESET}",
-      "#{BOLD}⏎#{RESET}#{DIM}attach#{RESET}",
-      "#{BOLD}n#{RESET}#{DIM}ew#{RESET}",
-      "#{BOLD}D#{RESET}#{DIM}etach#{RESET}",
-      "#{BOLD}⌫#{RESET}#{DIM}del#{RESET}",
-      "#{BOLD}S#{RESET}#{DIM}ervers#{RESET}",
-      "#{BOLD}q#{RESET}#{DIM}uit#{RESET}"
+      "#{BOLD}↑↓#{RESET} #{DIM}nav#{RESET}",
+      "#{CYAN}a#{RESET}#{DIM}ttach#{RESET}",
+      "#{CYAN}n#{RESET}#{DIM}ew#{RESET}",
+      "#{CYAN}d#{RESET}#{DIM}etach#{RESET}",
+      "#{BOLD}⌫#{RESET} #{DIM}del#{RESET}",
+      "#{CYAN}c#{RESET}#{DIM}onfig#{RESET}",
+      "#{CYAN}q#{RESET}#{DIM}uit#{RESET}"
     ]
 
     if @update_available && @update_available != VERSION
-      help_parts.insert(-2, "#{BOLD}u#{RESET}#{DIM}pdate#{RESET}")
+      help_parts.insert(-2, "#{CYAN}u#{RESET}#{DIM}pdate#{RESET}")
     end
 
     puts "  #{help_parts.join('  ')}"
@@ -235,18 +235,18 @@ class TSM
       @selected = [@selected + 1, sessions.length - 1].min if sessions.any?
     when 'k', "\e[A"
       @selected = [@selected - 1, 0].max if sessions.any?
-    when "\r", "\n"
+    when 'a', "\r", "\n"
       session = sessions[@selected]
       attach_session(session) if session && !session[:placeholder]
     when 'n'
       create_session(sessions)
-    when 'D'
+    when 'd'
       session = sessions[@selected]
       detach_session(session) if session && !session[:placeholder]
     when "\x7f", "\b" # Backspace
       session = sessions[@selected]
       delete_session(session) if session && !session[:placeholder]
-    when 'S'
+    when 'c'
       @server_mode = true
       @server_selected = 0
     when 'u'

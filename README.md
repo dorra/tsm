@@ -12,7 +12,7 @@ Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
   ── prod [main] ────────────────────
     ● api-workers              3w     5m
 
-  ↑↓nav  ⏎attach  new  Detach  ⌫del  Servers  quit
+  ↑↓ nav  attach  new  detach  ⌫ del  config  quit
 ```
 
 ## Features
@@ -58,15 +58,15 @@ tsm --help          Show help
 |-----|--------|
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
-| `Enter` | Attach to session |
+| `a` / `Enter` | Attach to session |
 | `n` | New session (on current server) |
-| `D` | Detach clients from session |
+| `d` | Detach clients from session |
 | `Backspace` | Delete session |
-| `S` | Open server management |
+| `c` | Open server config |
 | `u` | Update (when available) |
 | `q` | Quit |
 
-### Server Management (S)
+### Server Config (c)
 
 | Key | Action |
 |-----|--------|

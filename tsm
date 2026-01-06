@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.7.8'
+VERSION = '1.7.9'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -1088,6 +1088,9 @@ module Installer
       puts "#{RED}Download fehlgeschlagen!#{RESET}"
       exit 1
     end
+
+    # Force UTF-8 encoding to avoid issues on servers with different locales
+    new_content.force_encoding('UTF-8')
 
     new_version = new_content.match(/VERSION = '([^']+)'/)&.[](1) || 'unknown'
 

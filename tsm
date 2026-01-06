@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.7.6'
+VERSION = '1.7.7'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -358,7 +358,7 @@ class TSM
 
     char = read_char
 
-    if char.downcase == 'y'
+    if char.downcase == 'y' || char == "\r" || char == "\n"
       if server && !server.local?
         RemoteExecutor.kill_session(server, session[:name])
       else
@@ -383,7 +383,7 @@ class TSM
 
     char = read_char
 
-    if char.downcase == 'y'
+    if char.downcase == 'y' || char == "\r" || char == "\n"
       if server && !server.local?
         RemoteExecutor.detach_session(server, session[:name])
       else

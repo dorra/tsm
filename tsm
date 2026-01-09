@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.9.0'
+VERSION = '1.9.1'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -500,7 +500,7 @@ class TSM
       @server_selected = 0
     when 'u'
       run_update if @update_available && @update_available != VERSION
-    when 'q', "\u0003"
+    when 'q', "\e", "\u0003"
       @running = false
       print CLEAR
     end
@@ -671,7 +671,7 @@ class TSM
       set_main_server
     when 's'
       sync_servers_dialog
-    when 'b', 'q', "\u0003"
+    when 'b', 'q', "\e", "\u0003"
       @server_mode = false
       @selected = 0
       start_async_fetch  # Refresh sessions

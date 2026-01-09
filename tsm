@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.8.9'
+VERSION = '1.9.0'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -18,6 +18,28 @@ SERVERS_FILE = File.join(CONFIG_DIR, 'servers')
 SSH_TIMEOUT = 5
 
 require 'securerandom'
+require 'timeout'
+
+# ─────────────────────────────────────────────────────────────
+# Timeout helper (cross-platform, works on macOS without GNU coreutils)
+# ─────────────────────────────────────────────────────────────
+
+def run_with_timeout(cmd, timeout_secs)
+  result = ""
+  pid = nil
+
+  begin
+    Timeout.timeout(timeout_secs) do
+      result = `#{cmd}`.force_encoding('UTF-8')
+    end
+  rescue Timeout::Error
+    # Kill the process if still running
+    Process.kill('TERM', pid) rescue nil if pid
+    result = ""
+  end
+
+  result
+end
 
 # ─────────────────────────────────────────────────────────────
 # Machine ID (unique identifier per machine)
@@ -1134,12 +1156,12 @@ module RemoteExecutor
     test_cmd = build_ssh_command(server, "echo ok")
     test_output = nil
     2.times do |attempt|
-      test_output = `timeout #{SSH_TIMEOUT} #{test_cmd} 2>/dev/null`.force_encoding('UTF-8')
-      break if $?.success? && test_output.strip == "ok"
+      test_output = run_with_timeout("#{test_cmd} 2>/dev/null", SSH_TIMEOUT)
+      break if !test_output.empty? && test_output.strip == "ok"
       sleep 1 if attempt == 0
     end
 
-    unless $?.success? && test_output&.strip == "ok"
+    unless test_output&.strip == "ok"
       return { error: "Connection failed", sessions: [] }
     end
 
@@ -1147,7 +1169,7 @@ module RemoteExecutor
     format = %q[#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}]
     cmd = build_ssh_command(server, 'tmux list-sessions -F "' + format + '" 2>/dev/null || true')
 
-    output = `timeout #{SSH_TIMEOUT} #{cmd} 2>/dev/null`.force_encoding('UTF-8')
+    output = run_with_timeout("#{cmd} 2>/dev/null", SSH_TIMEOUT)
 
     sessions = output.lines.map do |line|
       parts = line.strip.split('|')
@@ -1471,7 +1493,7 @@ module Installer
         check_cmd = RemoteExecutor.build_ssh_command(server, "test -f ~/.local/bin/tsm && echo ok")
         result = nil
         2.times do |attempt|
-          result = `timeout 10 #{check_cmd} 2>&1`.force_encoding('UTF-8').strip
+          result = run_with_timeout("#{check_cmd} 2>&1", 10).strip
           break if result == "ok"
           sleep 1 if attempt == 0  # Wait before retry
         end
@@ -1489,8 +1511,8 @@ module Installer
 
         # Run update on remote (with timeout)
         update_cmd = RemoteExecutor.build_ssh_command(server, "~/.local/bin/tsm --update 2>&1")
-        output = `timeout 60 #{update_cmd} 2>&1`.force_encoding('UTF-8')
-        status = $?.success?
+        output = run_with_timeout("#{update_cmd} 2>&1", 60)
+        status = !output.empty?
 
         if status
           # Extract version info from output
@@ -1660,10 +1682,10 @@ if __FILE__ == $0
       cmd += " -p #{s.port}" if s.port && s.port != 22
       target = s.user && !s.user.empty? ? "#{s.user}@#{s.host}" : s.host
 
-      test_result = `timeout 10 #{cmd} #{target} '#{path_prefix}echo ok' 2>&1`.strip
+      test_result = run_with_timeout("#{cmd} #{target} '#{path_prefix}echo ok' 2>&1", 10).strip
       puts "  echo ok: #{test_result.inspect}"
 
-      tmux_result = `timeout 10 #{cmd} #{target} '#{path_prefix}tmux list-sessions 2>&1' 2>&1`.strip
+      tmux_result = run_with_timeout("#{cmd} #{target} '#{path_prefix}tmux list-sessions 2>&1' 2>&1", 10).strip
       puts "  tmux list-sessions: #{tmux_result.inspect}"
       puts
     end

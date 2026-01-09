@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.8.8'
+VERSION = '1.8.9'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -1647,6 +1647,7 @@ if __FILE__ == $0
     servers = ServerManager.load_servers
     puts "Machine-ID: #{MachineId.current}"
     puts "Servers: #{servers.length}\n\n"
+    path_prefix = "export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; "
     servers.each do |s|
       puts "#{s.alias_name}:"
       puts "  host: #{s.host.inspect}"
@@ -1659,10 +1660,10 @@ if __FILE__ == $0
       cmd += " -p #{s.port}" if s.port && s.port != 22
       target = s.user && !s.user.empty? ? "#{s.user}@#{s.host}" : s.host
 
-      test_result = `timeout 10 #{cmd} #{target} 'echo ok' 2>&1`.strip
+      test_result = `timeout 10 #{cmd} #{target} '#{path_prefix}echo ok' 2>&1`.strip
       puts "  echo ok: #{test_result.inspect}"
 
-      tmux_result = `timeout 10 #{cmd} #{target} 'tmux list-sessions 2>&1' 2>&1`.strip
+      tmux_result = `timeout 10 #{cmd} #{target} '#{path_prefix}tmux list-sessions 2>&1' 2>&1`.strip
       puts "  tmux list-sessions: #{tmux_result.inspect}"
       puts
     end

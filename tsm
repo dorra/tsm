@@ -1233,7 +1233,7 @@ module Installer
 
   def path_configured?(shell_info)
     return true unless shell_info
-    return true unless File.exist?(shell_info[:rc])
+    return false unless File.exist?(shell_info[:rc])  # Create if not exists
 
     content = File.read(shell_info[:rc])
     content.include?('.local/bin')

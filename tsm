@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.8.7'
+VERSION = '1.8.8'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -1018,7 +1018,9 @@ module RemoteExecutor
     port_opt = server.port && server.port != 22 ? "-p #{server.port}" : ""
     target = server.ssh_target
 
-    "ssh #{opts} #{port_opt} #{target} '#{remote_cmd}'"
+    # Add common paths to ensure tmux is found (Homebrew, local bin)
+    path_prefix = "export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; "
+    "ssh #{opts} #{port_opt} #{target} '#{path_prefix}#{remote_cmd}'"
   end
 
   def attach_session(server, session_name)

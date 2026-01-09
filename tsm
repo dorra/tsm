@@ -1219,15 +1219,34 @@ module Installer
 
   def detect_shell
     shell = ENV['SHELL'] || ''
+
+    # Check ENV['SHELL'] first
     if shell.include?('zsh')
-      { name: 'zsh', rc: File.expand_path('~/.zshrc') }
+      return { name: 'zsh', rc: File.expand_path('~/.zshrc') }
     elsif shell.include?('bash')
       bashrc = File.expand_path('~/.bashrc')
       bash_profile = File.expand_path('~/.bash_profile')
       rc = File.exist?(bashrc) ? bashrc : bash_profile
-      { name: 'bash', rc: rc }
+      return { name: 'bash', rc: rc }
+    end
+
+    # Fallback: check existing rc files (for non-interactive SSH sessions)
+    zshrc = File.expand_path('~/.zshrc')
+    bashrc = File.expand_path('~/.bashrc')
+    bash_profile = File.expand_path('~/.bash_profile')
+
+    if File.exist?(zshrc)
+      { name: 'zsh', rc: zshrc }
+    elsif File.exist?(bashrc)
+      { name: 'bash', rc: bashrc }
+    elsif File.exist?(bash_profile)
+      { name: 'bash', rc: bash_profile }
+    elsif RUBY_PLATFORM.include?('darwin')
+      # macOS defaults to zsh
+      { name: 'zsh', rc: zshrc }
     else
-      nil
+      # Linux defaults to bash
+      { name: 'bash', rc: bashrc }
     end
   end
 

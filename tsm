@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.8.2'
+VERSION = '1.8.3'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -1462,11 +1462,13 @@ module Installer
       begin
         # Check if tsm is installed (with timeout)
         check_cmd = RemoteExecutor.build_ssh_command(server, "test -f ~/.local/bin/tsm && echo ok")
-        result = `timeout 10 #{check_cmd} 2>/dev/null`.strip
+        result = `timeout 10 #{check_cmd} 2>&1`.strip
 
         unless result == "ok"
           if result.empty?
-            puts "#{YELLOW}nicht erreichbar#{RESET}"
+            puts "#{YELLOW}timeout#{RESET}"
+          elsif result.include?("Connection") || result.include?("connect") || result.include?("ssh")
+            puts "#{YELLOW}SSH fehlgeschlagen#{RESET}"
           else
             puts "#{YELLOW}tsm nicht installiert#{RESET}"
           end

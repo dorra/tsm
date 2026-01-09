@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.9.1'
+VERSION = '1.9.2'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -740,9 +740,15 @@ class TSM
 
   def set_main_server
     server = @servers[@server_selected]
-    return if server.local?
 
-    @servers = ServerManager.set_main(@servers, server.alias_name)
+    # Toggle: if already main, unmark it; otherwise mark as main
+    if server.is_main
+      server.is_main = false
+    else
+      @servers.each { |s| s.is_main = false }
+      server.is_main = true
+    end
+
     ServerManager.save_servers(@servers)
   end
 

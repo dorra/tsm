@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.9.2'
+VERSION = '1.9.3'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -631,7 +631,7 @@ class TSM
       pointer = idx == @server_selected ? "#{CYAN}❯#{RESET}" : " "
 
       if server.local?
-        target = "localhost"
+        target = server.host || "localhost"
       else
         target = server.ssh_target || server.host
         target += ":#{server.port}" if server.port && server.port != 22

@@ -212,6 +212,16 @@ class TSM
     self_server = ServerManager.self_entry(@servers)
     return if self_server
 
+    # Check if there are entries without machine_id that we could claim
+    unclaimed = @servers.select { |s| s.machine_id.nil? || s.machine_id.empty? }
+    unclaimed.reject! { |s| s.host.nil? || s.host.empty? }  # Exclude legacy local
+
+    if unclaimed.any?
+      # Let user claim an existing entry
+      claimed = claim_existing_entry(unclaimed)
+      return if claimed
+    end
+
     # No entry for this machine - prompt user to create one
     print CLEAR
     puts "  #{BOLD}#{CYAN}TSM Setup#{RESET}\n\n"
@@ -253,6 +263,41 @@ class TSM
 
     puts "\n  #{GREEN}✓ Rechner '#{alias_name}' registriert#{RESET}\n"
     sleep 1
+  end
+
+  def claim_existing_entry(unclaimed)
+    print CLEAR
+    puts "  #{BOLD}#{CYAN}TSM Setup#{RESET}\n\n"
+    puts "  #{DIM}Diese Maschine hat noch keine Machine-ID in der Config.#{RESET}\n"
+    puts "  #{DIM}Machine-ID: #{MachineId.current}#{RESET}\n\n"
+    puts "  #{BOLD}Bist du einer dieser Server?#{RESET}\n\n"
+
+    unclaimed.each_with_index do |server, idx|
+      puts "  #{CYAN}#{idx + 1}#{RESET}) #{server.alias_name} (#{server.host})"
+    end
+    puts "  #{CYAN}n#{RESET}) Nein, neuen Eintrag erstellen\n\n"
+
+    print "  Auswahl: "
+    system('stty -raw echo')
+    choice = $stdin.gets&.strip&.downcase
+
+    return false if choice == 'n' || choice.nil? || choice.empty?
+
+    idx = choice.to_i - 1
+    return false if idx < 0 || idx >= unclaimed.length
+
+    # Claim this entry
+    server = unclaimed[idx]
+    server.machine_id = MachineId.current
+
+    # Remove legacy local entry if exists
+    ServerManager.cleanup_legacy_local!(@servers)
+
+    ServerManager.save_servers(@servers)
+
+    puts "\n  #{GREEN}✓ Machine-ID für '#{server.alias_name}' gesetzt#{RESET}\n"
+    sleep 1
+    true
   end
 
   def migrate_server_machine_ids!

@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.8.0'
+VERSION = '1.8.1'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -208,6 +208,13 @@ class TSM
   def ensure_self_entry!
     @servers = ServerManager.load_servers
 
+    # Remove duplicate aliases (keep ones with machine_id)
+    original_count = @servers.length
+    ServerManager.remove_duplicates!(@servers)
+    if @servers.length != original_count
+      ServerManager.save_servers(@servers)
+    end
+
     # Check if we have an entry with our machine_id
     self_server = ServerManager.self_entry(@servers)
     return if self_server
@@ -233,6 +240,13 @@ class TSM
     print "  Alias für diesen Rechner: "
     alias_name = $stdin.gets&.strip
     return if alias_name.nil? || alias_name.empty?
+
+    # Check for duplicate alias
+    if @servers.any? { |s| s.alias_name == alias_name }
+      puts "\n  #{RED}Alias '#{alias_name}' existiert bereits!#{RESET}"
+      sleep 2
+      return
+    end
 
     print "  Host/Domain (für SSH von anderen Rechnern): "
     host = $stdin.gets&.strip
@@ -944,6 +958,29 @@ module ServerManager
     return servers unless has_self
 
     servers.reject! { |s| s.machine_id.nil? && (s.host.nil? || s.host.empty?) }
+    servers
+  end
+
+  # Remove duplicate aliases, keeping the one with machine_id
+  def remove_duplicates!(servers)
+    seen = {}
+    servers.reject! do |s|
+      if seen[s.alias_name]
+        # Duplicate found - keep the one with machine_id
+        if s.machine_id && !s.machine_id.empty?
+          # This one has machine_id, remove the previous one
+          servers.delete(seen[s.alias_name])
+          seen[s.alias_name] = s
+          false
+        else
+          # This one has no machine_id, remove it
+          true
+        end
+      else
+        seen[s.alias_name] = s
+        false
+      end
+    end
     servers
   end
 

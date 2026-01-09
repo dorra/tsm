@@ -4,21 +4,70 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.7.9'
+VERSION = '1.8.0'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
 LAST_CHECK_FILE = File.join(CONFIG_DIR, 'last_check')
 AVAILABLE_VERSION_FILE = File.join(CONFIG_DIR, 'available_version')
+MACHINE_ID_FILE = File.join(CONFIG_DIR, 'machine-id')
 
 UPDATE_URL_DEFAULT = 'https://raw.githubusercontent.com/dorra/tsm/main/tsm'
 UPDATE_CHECK_INTERVAL = 86400 # 24 hours in seconds
 SERVERS_FILE = File.join(CONFIG_DIR, 'servers')
 SSH_TIMEOUT = 5
 
+require 'securerandom'
+
+# ─────────────────────────────────────────────────────────────
+# Machine ID (unique identifier per machine)
+# ─────────────────────────────────────────────────────────────
+
+module MachineId
+  extend self
+
+  def ensure!
+    Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
+    return load if exists?
+    generate!
+  end
+
+  def exists?
+    File.exist?(MACHINE_ID_FILE)
+  end
+
+  def load
+    return nil unless exists?
+    File.read(MACHINE_ID_FILE).strip
+  rescue
+    nil
+  end
+
+  def generate!
+    id = SecureRandom.uuid
+    File.write(MACHINE_ID_FILE, id)
+    id
+  rescue
+    nil
+  end
+
+  def current
+    @current ||= load
+  end
+
+  def reset_cache!
+    @current = nil
+  end
+end
+
 # Server configuration struct
-Server = Struct.new(:alias_name, :host, :user, :port, :is_main, keyword_init: true) do
+Server = Struct.new(:alias_name, :host, :user, :port, :is_main, :machine_id, keyword_init: true) do
   def local?
+    # Check machine_id first (primary method)
+    if machine_id && !machine_id.empty?
+      return machine_id == MachineId.current
+    end
+    # Fallback for legacy entries
     host.nil? || host.empty? || host == 'localhost'
   end
 
@@ -32,7 +81,7 @@ Server = Struct.new(:alias_name, :host, :user, :port, :is_main, keyword_init: tr
   end
 
   def to_line
-    "#{alias_name}|#{host || ''}|#{user || ''}|#{port || 22}|#{is_main}"
+    "#{alias_name}|#{host || ''}|#{user || ''}|#{port || 22}|#{is_main}|#{machine_id || ''}"
   end
 end
 
@@ -62,6 +111,16 @@ class TSM
 
   def run
     check_tmux!
+
+    # Ensure machine-id exists
+    MachineId.ensure!
+    MachineId.reset_cache!
+
+    # Check if this machine has an entry in servers config
+    ensure_self_entry!
+
+    # Migrate old servers without machine-id
+    migrate_server_machine_ids!
 
     # Trigger background update check if needed
     UpdateChecker.check_async
@@ -143,6 +202,84 @@ class TSM
     unless system('which tmux > /dev/null 2>&1')
       puts "#{RED}Error: tmux nicht gefunden#{RESET}"
       exit 1
+    end
+  end
+
+  def ensure_self_entry!
+    @servers = ServerManager.load_servers
+
+    # Check if we have an entry with our machine_id
+    self_server = ServerManager.self_entry(@servers)
+    return if self_server
+
+    # No entry for this machine - prompt user to create one
+    print CLEAR
+    puts "  #{BOLD}#{CYAN}TSM Setup#{RESET}\n\n"
+    puts "  #{DIM}Diese Maschine ist noch nicht in der Server-Config registriert.#{RESET}\n"
+    puts "  #{DIM}Machine-ID: #{MachineId.current}#{RESET}\n\n"
+
+    system('stty -raw echo')
+
+    print "  Alias für diesen Rechner: "
+    alias_name = $stdin.gets&.strip
+    return if alias_name.nil? || alias_name.empty?
+
+    print "  Host/Domain (für SSH von anderen Rechnern): "
+    host = $stdin.gets&.strip
+    return if host.nil? || host.empty?
+
+    print "  User (optional): "
+    user = $stdin.gets&.strip
+    user = nil if user&.empty?
+
+    print "  Port (default 22): "
+    port_str = $stdin.gets&.strip
+    port = port_str&.empty? ? 22 : port_str.to_i
+
+    new_server = Server.new(
+      alias_name: alias_name,
+      host: host,
+      user: user,
+      port: port,
+      is_main: false,
+      machine_id: MachineId.current
+    )
+    @servers << new_server
+
+    # Remove legacy local entry if exists
+    ServerManager.cleanup_legacy_local!(@servers)
+
+    ServerManager.save_servers(@servers)
+
+    puts "\n  #{GREEN}✓ Rechner '#{alias_name}' registriert#{RESET}\n"
+    sleep 1
+  end
+
+  def migrate_server_machine_ids!
+    # Find servers without machine_id (excluding legacy local entries)
+    servers_to_migrate = @servers.select do |s|
+      s.machine_id.nil? && s.host && !s.host.empty? && s.host != 'localhost'
+    end
+
+    return if servers_to_migrate.empty?
+
+    print CLEAR
+    puts "  #{BOLD}#{CYAN}Migrating Server IDs#{RESET}\n\n"
+    puts "  #{DIM}Fetching machine-ids from servers without ID...#{RESET}\n\n"
+
+    changed = false
+    servers_to_migrate.each do |server|
+      remote_id = fetch_remote_machine_id(server)
+      if remote_id
+        server.machine_id = remote_id
+        changed = true
+      end
+    end
+
+    if changed
+      ServerManager.save_servers(@servers)
+      puts "\n  #{GREEN}✓ Server IDs migrated#{RESET}\n"
+      sleep 1
     end
   end
 
@@ -487,14 +624,19 @@ class TSM
       host: host,
       user: user,
       port: port,
-      is_main: false
+      is_main: false,
+      machine_id: nil
     )
-    @servers << new_server
 
+    # Ensure tsm is installed on new server and get machine-id
+    ensure_tsm_on_server(new_server)
+    remote_id = fetch_remote_machine_id(new_server)
+    new_server.machine_id = remote_id if remote_id
+
+    @servers << new_server
     ServerManager.save_servers(@servers)
 
-    # Ensure tsm is installed on new server, then push config
-    ensure_tsm_on_server(new_server)
+    # Push config to new server
     push_config_to_server(new_server)
   end
 
@@ -581,28 +723,87 @@ class TSM
   def ensure_tsm_on_server(server)
     return if server.local?
 
-    # Check if tsm is installed
-    check_cmd = RemoteExecutor.build_ssh_command(server, "test -f ~/.local/bin/tsm && echo installed")
+    # Check if tsm is installed AND machine-id exists
+    check_cmd = RemoteExecutor.build_ssh_command(server,
+      "test -f ~/.local/bin/tsm && test -s ~/.config/tsm/machine-id && echo ready")
     result = `#{check_cmd} 2>/dev/null`.strip
 
-    if result == "installed"
-      return  # Already installed
+    if result == "ready"
+      return  # Already installed with machine-id
     end
 
     print CLEAR
     puts "  #{DIM}Installing tsm on #{server.alias_name}...#{RESET}"
 
-    # Install tsm on remote server
-    install_cmd = RemoteExecutor.build_ssh_command(server,
+    # Download tsm to remote server
+    download_cmd = RemoteExecutor.build_ssh_command(server,
       "mkdir -p ~/.local/bin && curl -fsSL #{UPDATE_URL_DEFAULT} -o ~/.local/bin/tsm && chmod +x ~/.local/bin/tsm")
 
+    unless system(download_cmd)
+      puts "  #{YELLOW}tsm download failed#{RESET}"
+      sleep 1
+      return
+    end
+
+    puts "  #{GREEN}tsm downloaded#{RESET}"
+
+    # Run --install on remote to set up config dir and machine-id
+    puts "  #{DIM}Running tsm --install on #{server.alias_name}...#{RESET}"
+    install_cmd = RemoteExecutor.build_ssh_command(server, "~/.local/bin/tsm --install")
+
     if system(install_cmd)
-      puts "\n  #{GREEN}tsm installed on #{server.alias_name}#{RESET}\n"
+      puts "  #{GREEN}tsm installed on #{server.alias_name}#{RESET}"
     else
-      puts "\n  #{YELLOW}tsm installation failed (optional)#{RESET}\n"
+      puts "  #{YELLOW}tsm --install failed, trying manual machine-id creation...#{RESET}"
+      ensure_remote_machine_id(server)
     end
 
     sleep 1
+  end
+
+  def ensure_remote_machine_id(server)
+    return if server.local?
+
+    puts "  #{DIM}Creating machine-id on #{server.alias_name}...#{RESET}"
+
+    # Create config dir and generate machine-id if not exists
+    # Use double quotes for ruby -e to avoid shell escaping issues with SSH single quotes
+    cmd = RemoteExecutor.build_ssh_command(server,
+      'mkdir -p ~/.config/tsm && ' \
+      'test -s ~/.config/tsm/machine-id || ' \
+      'ruby -r securerandom -e "puts SecureRandom.uuid" > ~/.config/tsm/machine-id')
+
+    system(cmd)
+  end
+
+  def fetch_remote_machine_id(server)
+    return nil if server.local?
+
+    puts "  #{DIM}Fetching machine-id from #{server.alias_name}...#{RESET}"
+
+    # Try to read existing machine-id
+    read_cmd = RemoteExecutor.build_ssh_command(server, "cat ~/.config/tsm/machine-id 2>/dev/null")
+    result = `#{read_cmd}`.strip
+
+    if $?.success? && !result.empty? && result =~ /^[0-9a-f-]{36}$/i
+      puts "  #{GREEN}Machine-ID: #{result[0..7]}...#{RESET}"
+      return result
+    end
+
+    # No machine-id exists, try to create one
+    puts "  #{DIM}Creating machine-id on #{server.alias_name}...#{RESET}"
+
+    create_cmd = RemoteExecutor.build_ssh_command(server,
+      'mkdir -p ~/.config/tsm && ruby -r securerandom -e "puts SecureRandom.uuid" > ~/.config/tsm/machine-id && cat ~/.config/tsm/machine-id')
+    result = `#{create_cmd}`.strip
+
+    if $?.success? && !result.empty? && result =~ /^[0-9a-f-]{36}$/i
+      puts "  #{GREEN}Machine-ID created: #{result[0..7]}...#{RESET}"
+      return result
+    end
+
+    puts "  #{YELLOW}Could not get machine-id#{RESET}"
+    nil
   end
 
   def pull_config_from_main(main)
@@ -640,7 +841,8 @@ module ServerManager
     host: nil,
     user: nil,
     port: 22,
-    is_main: false
+    is_main: false,
+    machine_id: nil
   )
 
   def load_servers
@@ -659,7 +861,8 @@ module ServerManager
         host: parts[1]&.empty? ? nil : parts[1],
         user: parts[2]&.empty? ? nil : parts[2],
         port: (parts[3] || 22).to_i,
-        is_main: parts[4] == 'true'
+        is_main: parts[4] == 'true',
+        machine_id: parts[5]&.empty? ? nil : parts[5]
       )
     end
 
@@ -672,7 +875,7 @@ module ServerManager
     Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
 
     content = "# TSM Server Configuration\n"
-    content += "# Format: alias|host|user|port|is_main\n\n"
+    content += "# Format: alias|host|user|port|is_main|machine_id\n\n"
 
     servers.each do |s|
       content += "#{s.to_line}\n"
@@ -681,6 +884,22 @@ module ServerManager
     File.write(SERVERS_FILE, content)
   rescue
     # Silently fail
+  end
+
+  # Check if current machine has an entry with its machine_id
+  def self_entry(servers)
+    current_id = MachineId.current
+    return nil unless current_id
+    servers.find { |s| s.machine_id == current_id }
+  end
+
+  # Remove legacy local entries (host=nil) if a machine_id based entry exists
+  def cleanup_legacy_local!(servers)
+    has_self = servers.any? { |s| s.machine_id == MachineId.current }
+    return servers unless has_self
+
+    servers.reject! { |s| s.machine_id.nil? && (s.host.nil? || s.host.empty?) }
+    servers
   end
 
   def main_server(servers)
@@ -1047,6 +1266,10 @@ module Installer
     unless Dir.exist?(CONFIG_DIR)
       Dir.mkdir(CONFIG_DIR)
     end
+
+    # Generate machine-id
+    puts "  #{DIM}Generiere Machine-ID...#{RESET}"
+    MachineId.ensure!
 
     puts "\n#{GREEN}#{BOLD}✓ Installation erfolgreich!#{RESET}\n\n"
 

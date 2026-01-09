@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.8.5'
+VERSION = '1.8.6'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -1128,11 +1128,16 @@ module RemoteExecutor
   end
 
   def fetch_remote_sessions(server)
-    # First check if SSH connection works
+    # First check if SSH connection works (with retry)
     test_cmd = build_ssh_command(server, "echo ok")
-    test_output = `timeout #{SSH_TIMEOUT} #{test_cmd} 2>/dev/null`
+    test_output = nil
+    2.times do |attempt|
+      test_output = `timeout #{SSH_TIMEOUT} #{test_cmd} 2>/dev/null`.force_encoding('UTF-8')
+      break if $?.success? && test_output.strip == "ok"
+      sleep 1 if attempt == 0
+    end
 
-    unless $?.success? && test_output.strip == "ok"
+    unless $?.success? && test_output&.strip == "ok"
       return { error: "Connection failed", sessions: [] }
     end
 
@@ -1140,7 +1145,7 @@ module RemoteExecutor
     format = %q[#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}]
     cmd = build_ssh_command(server, 'tmux list-sessions -F "' + format + '" 2>/dev/null || true')
 
-    output = `timeout #{SSH_TIMEOUT} #{cmd} 2>/dev/null`
+    output = `timeout #{SSH_TIMEOUT} #{cmd} 2>/dev/null`.force_encoding('UTF-8')
 
     sessions = output.lines.map do |line|
       parts = line.strip.split('|')

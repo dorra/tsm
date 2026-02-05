@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.9.4'
+VERSION = '1.9.5'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -30,11 +30,17 @@ def run_with_timeout(cmd, timeout_secs)
 
   begin
     Timeout.timeout(timeout_secs) do
-      result = `#{cmd}`.force_encoding('UTF-8')
+      IO.popen(cmd, err: [:child, :out]) do |io|
+        pid = io.pid
+        result = io.read.to_s.force_encoding('UTF-8')
+      end
     end
   rescue Timeout::Error
-    # Kill the process if still running
-    Process.kill('TERM', pid) rescue nil if pid
+    # Kill the process tree if still running
+    if pid
+      Process.kill('TERM', -pid) rescue Process.kill('TERM', pid) rescue nil
+      Process.wait(pid) rescue nil
+    end
     result = ""
   end
 
@@ -1426,7 +1432,7 @@ module Installer
     end
   end
 
-  def update!
+  def update!(local_only: false)
     puts "#{BOLD}#{CYAN}TSM Update#{RESET}\n\n"
 
     url = load_update_url
@@ -1458,8 +1464,8 @@ module Installer
       puts "\n#{GREEN}Bereits aktuell (v#{VERSION})#{RESET}\n\n"
       # Clear available version cache
       File.delete(AVAILABLE_VERSION_FILE) if File.exist?(AVAILABLE_VERSION_FILE)
-      # Still update remote servers
-      update_remote_servers!
+      # Update remote servers only if not local_only
+      update_remote_servers! unless local_only
       exit 0
     end
 
@@ -1482,8 +1488,8 @@ module Installer
     puts "\n#{GREEN}#{BOLD}✓ Update erfolgreich!#{RESET}"
     puts "  #{DIM}v#{VERSION} → v#{new_version}#{RESET}\n\n"
 
-    # Update on all remote servers
-    update_remote_servers!
+    # Update on all remote servers only if not local_only
+    update_remote_servers! unless local_only
   end
 
   def update_remote_servers!
@@ -1517,7 +1523,7 @@ module Installer
         end
 
         # Run update on remote (with timeout)
-        update_cmd = RemoteExecutor.build_ssh_command(server, "~/.local/bin/tsm --update 2>&1")
+        update_cmd = RemoteExecutor.build_ssh_command(server, "~/.local/bin/tsm --update-local 2>&1")
         output = run_with_timeout("#{update_cmd} 2>&1", 60)
         status = !output.empty?
 
@@ -1665,6 +1671,8 @@ if __FILE__ == $0
     Installer.install!
   when '--update', '-u'
     Installer.update!
+  when '--update-local'
+    Installer.update!(local_only: true)
   when '--check', '-c'
     Installer.check_update_manual
   when '--version', '-v'

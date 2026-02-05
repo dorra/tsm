@@ -1209,8 +1209,9 @@ module RemoteExecutor
     opts = "-o StrictHostKeyChecking=accept-new"
     port_opt = server.port && server.port != 22 ? "-p #{server.port}" : ""
     target = server.ssh_target
+    path_prefix = "export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; "
 
-    exec("ssh #{opts} #{port_opt} -t #{target} 'tmux attach -t \"#{session_name}\"'")
+    exec("ssh #{opts} #{port_opt} -t #{target} '#{path_prefix}tmux attach -t \"#{session_name}\"'")
   end
 end
 

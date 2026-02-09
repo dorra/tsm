@@ -140,6 +140,21 @@ Optional config file: `~/.config/tsm/config`
 update_url=https://raw.githubusercontent.com/dorra/tsm/main/tsm
 ```
 
+## Troubleshooting
+
+### tmux scrolling feels buggy / mouse wheel doesn’t scroll
+
+If you’re seeing weird scrolling behavior in tmux, enable mouse support:
+
+1) Open `~/.tmux.conf`
+2) Add:
+
+```tmux
+set -g mouse on
+```
+
+3) Save and restart tmux.
+
 ## Requirements
 
 - Ruby (tested with 2.7+)

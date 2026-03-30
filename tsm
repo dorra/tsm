@@ -18,6 +18,7 @@ SERVERS_FILE = File.join(CONFIG_DIR, 'servers')
 SSH_TIMEOUT = 5
 
 require 'securerandom'
+require 'shellwords'
 require 'timeout'
 
 # ─────────────────────────────────────────────────────────────
@@ -67,7 +68,7 @@ module MachineId
   def load
     return nil unless exists?
     File.read(MACHINE_ID_FILE).strip
-  rescue
+  rescue StandardError
     nil
   end
 
@@ -75,7 +76,7 @@ module MachineId
     id = SecureRandom.uuid
     File.write(MACHINE_ID_FILE, id)
     id
-  rescue
+  rescue StandardError
     nil
   end
 
@@ -260,23 +261,23 @@ class TSM
     # No entry for this machine - prompt user to create one
     print CLEAR
     puts "  #{BOLD}#{CYAN}TSM Setup#{RESET}\n\n"
-    puts "  #{DIM}Diese Maschine ist noch nicht in der Server-Config registriert.#{RESET}\n"
+    puts "  #{DIM}This machine is not yet registered in the server config.#{RESET}\n"
     puts "  #{DIM}Machine-ID: #{MachineId.current}#{RESET}\n\n"
 
     system('stty -raw echo')
 
-    print "  Alias für diesen Rechner: "
+    print "  Alias for this machine: "
     alias_name = $stdin.gets&.strip
     return if alias_name.nil? || alias_name.empty?
 
     # Check for duplicate alias
     if @servers.any? { |s| s.alias_name == alias_name }
-      puts "\n  #{RED}Alias '#{alias_name}' existiert bereits!#{RESET}"
+      puts "\n  #{RED}Alias '#{alias_name}' already exists!#{RESET}"
       sleep 2
       return
     end
 
-    print "  Host/Domain (für SSH von anderen Rechnern): "
+    print "  Host/Domain (for SSH from other machines): "
     host = $stdin.gets&.strip
     return if host.nil? || host.empty?
 
@@ -303,23 +304,23 @@ class TSM
 
     ServerManager.save_servers(@servers)
 
-    puts "\n  #{GREEN}✓ Rechner '#{alias_name}' registriert#{RESET}\n"
+    puts "\n  #{GREEN}✓ Machine '#{alias_name}' registered#{RESET}\n"
     sleep 1
   end
 
   def claim_existing_entry(unclaimed)
     print CLEAR
     puts "  #{BOLD}#{CYAN}TSM Setup#{RESET}\n\n"
-    puts "  #{DIM}Diese Maschine hat noch keine Machine-ID in der Config.#{RESET}\n"
+    puts "  #{DIM}This machine has no Machine-ID in the config yet.#{RESET}\n"
     puts "  #{DIM}Machine-ID: #{MachineId.current}#{RESET}\n\n"
-    puts "  #{BOLD}Bist du einer dieser Server?#{RESET}\n\n"
+    puts "  #{BOLD}Are you one of these servers?#{RESET}\n\n"
 
     unclaimed.each_with_index do |server, idx|
       puts "  #{CYAN}#{idx + 1}#{RESET}) #{server.alias_name} (#{server.host})"
     end
-    puts "  #{CYAN}n#{RESET}) Nein, neuen Eintrag erstellen\n\n"
+    puts "  #{CYAN}n#{RESET}) No, create a new entry\n\n"
 
-    print "  Auswahl: "
+    print "  Choice: "
     system('stty -raw echo')
     choice = $stdin.gets&.strip&.downcase
 
@@ -337,7 +338,7 @@ class TSM
 
     ServerManager.save_servers(@servers)
 
-    puts "\n  #{GREEN}✓ Machine-ID für '#{server.alias_name}' gesetzt#{RESET}\n"
+    puts "\n  #{GREEN}✓ Machine-ID set for '#{server.alias_name}'#{RESET}\n"
     sleep 1
     true
   end
@@ -538,10 +539,11 @@ class TSM
       RemoteExecutor.attach_session(server, session[:name])
     else
       print CLEAR
+      escaped = Shellwords.escape(session[:name])
       if ENV['TMUX']
-        exec("tmux switch-client -t '#{session[:name]}'")
+        exec("tmux switch-client -t #{escaped}")
       else
-        exec("tmux attach -t '#{session[:name]}'")
+        exec("tmux attach -t #{escaped}")
       end
     end
   end
@@ -560,7 +562,7 @@ class TSM
     server_info = server && !server.local? ? " on #{CYAN}#{server.alias_name}#{RESET}" : ""
 
     print CLEAR
-    print "#{BOLD}Neue Session#{server_info}: #{RESET}"
+    print "#{BOLD}New session#{server_info}: #{RESET}"
     system('stty -raw echo')
     name = $stdin.gets&.strip
 
@@ -576,8 +578,8 @@ class TSM
     server_info = server && !server.local? ? " on #{server.alias_name}" : ""
 
     print CLEAR
-    puts "#{RED}#{BOLD}Session '#{session[:name]}'#{server_info} wirklich löschen?#{RESET}\n\n"
-    puts "  #{DIM}Diese Aktion kann nicht rückgängig gemacht werden.#{RESET}\n\n"
+    puts "#{RED}#{BOLD}Delete session '#{session[:name]}'#{server_info}?#{RESET}\n\n"
+    puts "  #{DIM}This action cannot be undone.#{RESET}\n\n"
     print "  #{CYAN}y#{RESET}/#{DIM}n#{RESET}: "
 
     char = read_char
@@ -586,7 +588,7 @@ class TSM
       if server && !server.local?
         RemoteExecutor.kill_session(server, session[:name])
       else
-        system("tmux kill-session -t '#{session[:name]}'")
+        system("tmux kill-session -t #{Shellwords.escape(session[:name])}")
       end
       @selected = [@selected - 1, 0].max
       start_async_fetch  # Refresh session list
@@ -601,8 +603,8 @@ class TSM
     server_info = server && !server.local? ? " on #{server.alias_name}" : ""
 
     print CLEAR
-    puts "#{YELLOW}#{BOLD}Clients von '#{session[:name]}'#{server_info} trennen?#{RESET}\n\n"
-    puts "  #{DIM}Alle verbundenen Clients werden getrennt.#{RESET}\n\n"
+    puts "#{YELLOW}#{BOLD}Detach clients from '#{session[:name]}'#{server_info}?#{RESET}\n\n"
+    puts "  #{DIM}All connected clients will be detached.#{RESET}\n\n"
     print "  #{CYAN}y#{RESET}/#{DIM}n#{RESET}: "
 
     char = read_char
@@ -611,7 +613,7 @@ class TSM
       if server && !server.local?
         RemoteExecutor.detach_session(server, session[:name])
       else
-        system("tmux detach-client -s '#{session[:name]}'")
+        system("tmux detach-client -s #{Shellwords.escape(session[:name])}")
       end
       start_async_fetch  # Refresh session list
     end
@@ -734,7 +736,7 @@ class TSM
     return if server.local? && @servers.count(&:local?) == 1
 
     print CLEAR
-    puts "  #{RED}#{BOLD}Server '#{server.alias_name}' entfernen?#{RESET}\n\n"
+    puts "  #{RED}#{BOLD}Remove server '#{server.alias_name}'?#{RESET}\n\n"
     print "  #{CYAN}y#{RESET}/#{DIM}n#{RESET}: "
 
     if read_char.downcase == 'y'
@@ -763,9 +765,9 @@ class TSM
 
     unless main
       print CLEAR
-      puts "  #{RED}Kein Main-Server konfiguriert#{RESET}\n\n"
-      puts "  #{DIM}Wähle einen Server und drücke 'm' um ihn als Main zu setzen.#{RESET}\n\n"
-      print "  #{DIM}Enter zum Fortfahren...#{RESET}"
+      puts "  #{RED}No main server configured#{RESET}\n\n"
+      puts "  #{DIM}Select a server and press 'm' to set it as main.#{RESET}\n\n"
+      print "  #{DIM}Press Enter to continue...#{RESET}"
       read_char
       return
     end
@@ -960,7 +962,7 @@ module ServerManager
     end
 
     servers.empty? ? [DEFAULT_LOCAL.dup] : servers
-  rescue
+  rescue StandardError
     [DEFAULT_LOCAL.dup]
   end
 
@@ -975,7 +977,7 @@ module ServerManager
     end
 
     File.write(SERVERS_FILE, content)
-  rescue
+  rescue StandardError
     # Silently fail
   end
 
@@ -988,7 +990,9 @@ module ServerManager
 
   # Remove legacy local entries (host=nil) if a machine_id based entry exists
   def cleanup_legacy_local!(servers)
-    has_self = servers.any? { |s| s.machine_id == MachineId.current }
+    current_id = MachineId.current
+    return servers unless current_id
+    has_self = servers.any? { |s| s.machine_id == current_id }
     return servers unless has_self
 
     servers.reject! { |s| s.machine_id.nil? && (s.host.nil? || s.host.empty?) }
@@ -997,24 +1001,17 @@ module ServerManager
 
   # Remove duplicate aliases, keeping the one with machine_id
   def remove_duplicates!(servers)
-    seen = {}
-    servers.reject! do |s|
-      if seen[s.alias_name]
-        # Duplicate found - keep the one with machine_id
-        if s.machine_id && !s.machine_id.empty?
-          # This one has machine_id, remove the previous one
-          servers.delete(seen[s.alias_name])
-          seen[s.alias_name] = s
-          false
-        else
-          # This one has no machine_id, remove it
-          true
-        end
-      else
-        seen[s.alias_name] = s
-        false
+    # Group by alias, keep entry with machine_id when duplicates exist
+    grouped = {}
+    servers.each do |s|
+      existing = grouped[s.alias_name]
+      if existing.nil?
+        grouped[s.alias_name] = s
+      elsif s.machine_id && !s.machine_id.empty?
+        grouped[s.alias_name] = s
       end
     end
+    servers.replace(grouped.values)
     servers
   end
 
@@ -1066,33 +1063,36 @@ module RemoteExecutor
   end
 
   def detach_session(server, session_name)
+    escaped = Shellwords.escape(session_name)
     if server.local?
-      system("tmux detach-client -s '#{session_name}'")
+      system("tmux detach-client -s #{escaped}")
     else
-      cmd = build_ssh_command(server, "tmux detach-client -s '#{session_name}'")
+      cmd = build_ssh_command(server, "tmux detach-client -s #{escaped}")
       system(cmd)
     end
   end
 
   def kill_session(server, session_name)
+    escaped = Shellwords.escape(session_name)
     if server.local?
-      system("tmux kill-session -t '#{session_name}'")
+      system("tmux kill-session -t #{escaped}")
     else
-      cmd = build_ssh_command(server, "tmux kill-session -t '#{session_name}'")
+      cmd = build_ssh_command(server, "tmux kill-session -t #{escaped}")
       system(cmd)
     end
   end
 
   def create_session(server, session_name)
+    escaped = Shellwords.escape(session_name)
     if server.local?
       if ENV['TMUX']
-        system("tmux new-session -d -s '#{session_name}' && tmux switch-client -t '#{session_name}'")
+        system("tmux new-session -d -s #{escaped} && tmux switch-client -t #{escaped}")
       else
-        exec("tmux new-session -s '#{session_name}'")
+        exec("tmux new-session -s #{escaped}")
       end
     else
       # Create remote session and attach via SSH
-      create_cmd = "tmux new-session -d -s '#{session_name}'"
+      create_cmd = "tmux new-session -d -s #{escaped}"
       cmd = build_ssh_command(server, create_cmd)
       if system(cmd)
         remote_attach(server, session_name)
@@ -1203,10 +1203,11 @@ module RemoteExecutor
 
   def local_attach(session_name)
     print "\e[2J\e[H"
+    escaped = Shellwords.escape(session_name)
     if ENV['TMUX']
-      exec("tmux switch-client -t '#{session_name}'")
+      exec("tmux switch-client -t #{escaped}")
     else
-      exec("tmux attach -t '#{session_name}'")
+      exec("tmux attach -t #{escaped}")
     end
   end
 
@@ -1216,8 +1217,9 @@ module RemoteExecutor
     port_opt = server.port && server.port != 22 ? "-p #{server.port}" : ""
     target = server.ssh_target
     path_prefix = "export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; "
+    escaped = Shellwords.escape(session_name)
 
-    exec("ssh #{opts} #{port_opt} -t #{target} '#{path_prefix}tmux attach -t \"#{session_name}\"'")
+    exec("ssh #{opts} #{port_opt} -t #{target} '#{path_prefix}tmux attach -t #{escaped}'")
   end
 end
 
@@ -1238,7 +1240,7 @@ module UpdateChecker
 
     last_check = File.read(LAST_CHECK_FILE).to_i
     Time.now.to_i - last_check > UPDATE_CHECK_INTERVAL
-  rescue
+  rescue StandardError
     false
   end
 
@@ -1247,7 +1249,7 @@ module UpdateChecker
 
     version = File.read(AVAILABLE_VERSION_FILE).strip
     version.empty? ? nil : version
-  rescue
+  rescue StandardError
     nil
   end
 
@@ -1259,7 +1261,7 @@ module UpdateChecker
       check_now
     end
     Process.detach(pid) if pid
-  rescue
+  rescue StandardError
     # Fork failed or not available, try thread
     Thread.new { check_now } rescue nil
   end
@@ -1277,7 +1279,7 @@ module UpdateChecker
     end
 
     File.write(LAST_CHECK_FILE, Time.now.to_i.to_s) rescue nil
-  rescue
+  rescue StandardError
     # Silently fail - don't disrupt user
   end
 
@@ -1311,7 +1313,7 @@ module UpdateChecker
       end
     end
     UPDATE_URL_DEFAULT
-  rescue
+  rescue StandardError
     UPDATE_URL_DEFAULT
   end
 end
@@ -1388,12 +1390,12 @@ module Installer
     # Create directories
     install_dir = File.dirname(INSTALL_PATH)
     unless Dir.exist?(install_dir)
-      puts "  #{DIM}Erstelle #{install_dir}...#{RESET}"
+      puts "  #{DIM}Creating #{install_dir}...#{RESET}"
       Dir.mkdir(install_dir)
     end
 
     # Copy script
-    puts "  #{DIM}Kopiere nach #{INSTALL_PATH}...#{RESET}"
+    puts "  #{DIM}Copying to #{INSTALL_PATH}...#{RESET}"
     source = File.read($0)
     File.write(INSTALL_PATH, source)
     File.chmod(0755, INSTALL_PATH)
@@ -1401,7 +1403,7 @@ module Installer
     # Configure shell
     shell_info = detect_shell
     if shell_info && !path_configured?(shell_info)
-      puts "  #{DIM}Konfiguriere #{shell_info[:name]}...#{RESET}"
+      puts "  #{DIM}Configuring #{shell_info[:name]}...#{RESET}"
       configure_shell(shell_info)
     end
 
@@ -1411,17 +1413,17 @@ module Installer
     end
 
     # Generate machine-id
-    puts "  #{DIM}Generiere Machine-ID...#{RESET}"
+    puts "  #{DIM}Generating Machine-ID...#{RESET}"
     MachineId.ensure!
 
-    puts "\n#{GREEN}#{BOLD}✓ Installation erfolgreich!#{RESET}\n\n"
+    puts "\n#{GREEN}#{BOLD}✓ Installation successful!#{RESET}\n\n"
 
     if shell_info && !path_configured?(shell_info)
-      puts "  #{YELLOW}Starte eine neue Shell oder führe aus:#{RESET}"
+      puts "  #{YELLOW}Start a new shell or run:#{RESET}"
       puts "  #{BOLD}source #{shell_info[:rc]}#{RESET}\n\n"
     end
 
-    puts "  Dann einfach: #{BOLD}tsm#{RESET}\n\n"
+    puts "  Then just run: #{BOLD}tsm#{RESET}\n\n"
   end
 
   def configure_shell(shell_info)
@@ -1438,20 +1440,20 @@ module Installer
     url = load_update_url
 
     if url.include?('OWNER')
-      puts "#{RED}Update-URL nicht konfiguriert!#{RESET}\n\n"
-      puts "Bearbeite #{CONFIG_FILE} oder das Script selbst"
-      puts "und setze die GitHub Raw URL.\n\n"
-      puts "Beispiel:"
-      puts "#{DIM}https://raw.githubusercontent.com/deinuser/tsm/main/tsm#{RESET}\n\n"
+      puts "#{RED}Update URL not configured!#{RESET}\n\n"
+      puts "Edit #{CONFIG_FILE} or the script itself"
+      puts "and set the GitHub Raw URL.\n\n"
+      puts "Example:"
+      puts "#{DIM}https://raw.githubusercontent.com/youruser/tsm/main/tsm#{RESET}\n\n"
       exit 1
     end
 
-    puts "  #{DIM}Lade von #{url}...#{RESET}"
+    puts "  #{DIM}Downloading from #{url}...#{RESET}"
 
     new_content = fetch_url(url)
 
     unless new_content
-      puts "#{RED}Download fehlgeschlagen!#{RESET}"
+      puts "#{RED}Download failed!#{RESET}"
       exit 1
     end
 
@@ -1461,7 +1463,7 @@ module Installer
     new_version = new_content.match(/VERSION = '([^']+)'/)&.[](1) || 'unknown'
 
     if new_version == VERSION
-      puts "\n#{GREEN}Bereits aktuell (v#{VERSION})#{RESET}\n\n"
+      puts "\n#{GREEN}Already up to date (v#{VERSION})#{RESET}\n\n"
       # Clear available version cache
       File.delete(AVAILABLE_VERSION_FILE) if File.exist?(AVAILABLE_VERSION_FILE)
       # Update remote servers only if not local_only
@@ -1472,20 +1474,20 @@ module Installer
     # Backup current
     backup_path = "#{INSTALL_PATH}.backup"
     if installed?
-      puts "  #{DIM}Backup nach #{backup_path}...#{RESET}"
+      puts "  #{DIM}Backing up to #{backup_path}...#{RESET}"
       File.write(backup_path, File.read(INSTALL_PATH))
     end
 
     # Write new version
     target = installed? ? INSTALL_PATH : $0
-    puts "  #{DIM}Installiere v#{new_version}...#{RESET}"
+    puts "  #{DIM}Installing v#{new_version}...#{RESET}"
     File.write(target, new_content)
     File.chmod(0755, target)
 
     # Clear available version cache
     File.delete(AVAILABLE_VERSION_FILE) if File.exist?(AVAILABLE_VERSION_FILE)
 
-    puts "\n#{GREEN}#{BOLD}✓ Update erfolgreich!#{RESET}"
+    puts "\n#{GREEN}#{BOLD}✓ Update successful!#{RESET}"
     puts "  #{DIM}v#{VERSION} → v#{new_version}#{RESET}\n\n"
 
     # Update on all remote servers only if not local_only
@@ -1515,9 +1517,9 @@ module Installer
           if result.empty?
             puts "#{YELLOW}timeout#{RESET}"
           elsif result.downcase.include?("connection") || result.downcase.include?("ssh")
-            puts "#{YELLOW}SSH fehlgeschlagen#{RESET}"
+            puts "#{YELLOW}SSH failed#{RESET}"
           else
-            puts "#{YELLOW}tsm nicht installiert#{RESET}"
+            puts "#{YELLOW}tsm not installed#{RESET}"
           end
           next
         end
@@ -1529,9 +1531,9 @@ module Installer
 
         if status
           # Extract version info from output
-          if output.include?("Bereits aktuell")
-            puts "#{GREEN}aktuell#{RESET}"
-          elsif output.include?("Update erfolgreich")
+          if output.include?("Already up to date")
+            puts "#{GREEN}up to date#{RESET}"
+          elsif output.include?("Update successful")
             version_match = output.match(/v[\d.]+ → v([\d.]+)/)
             new_ver = version_match ? version_match[1] : "?"
             puts "#{GREEN}→ v#{new_ver}#{RESET}"
@@ -1539,10 +1541,10 @@ module Installer
             puts "#{GREEN}ok#{RESET}"
           end
         else
-          puts "#{RED}fehlgeschlagen#{RESET}"
+          puts "#{RED}failed#{RESET}"
         end
       rescue => e
-        puts "#{RED}Fehler: #{e.message[0..30]}#{RESET}"
+        puts "#{RED}Error: #{e.message[0..30]}#{RESET}"
       end
     end
 
@@ -1578,22 +1580,22 @@ module Installer
       end
     end
     UPDATE_URL_DEFAULT
-  rescue
+  rescue StandardError
     UPDATE_URL_DEFAULT
   end
 
   def prompt_install
     puts "#{BOLD}#{CYAN}TSM - Tmux Session Manager#{RESET}\n\n"
-    puts "TSM ist noch nicht installiert.\n\n"
-    print "Jetzt installieren? [#{BOLD}Y#{RESET}/n]: "
+    puts "TSM is not yet installed.\n\n"
+    print "Install now? [#{BOLD}Y#{RESET}/n]: "
 
     answer = $stdin.gets&.strip&.downcase
-    if answer.empty? || answer == 'y' || answer == 'j'
+    if answer.empty? || answer == 'y'
       puts
       install!
       true
     else
-      puts "\n#{DIM}OK. Du kannst später installieren mit:#{RESET}"
+      puts "\n#{DIM}OK. You can install later with:#{RESET}"
       puts "#{BOLD}./tsm --install#{RESET}\n\n"
       false
     end
@@ -1602,14 +1604,14 @@ module Installer
   def show_version
     puts "tsm v#{VERSION}"
     if installed?
-      puts "#{DIM}Installiert: #{INSTALL_PATH}#{RESET}"
+      puts "#{DIM}Installed: #{INSTALL_PATH}#{RESET}"
     else
-      puts "#{DIM}Nicht installiert#{RESET}"
+      puts "#{DIM}Not installed#{RESET}"
     end
 
     available = UpdateChecker.available_version
     if available && available != VERSION
-      puts "#{YELLOW}Update verfügbar: v#{available}#{RESET}"
+      puts "#{YELLOW}Update available: v#{available}#{RESET}"
     end
   end
 
@@ -1646,15 +1648,15 @@ module Installer
   end
 
   def check_update_manual
-    puts "#{BOLD}Prüfe auf Updates...#{RESET}\n"
+    puts "#{BOLD}Checking for updates...#{RESET}\n"
     UpdateChecker.check_now
 
     available = UpdateChecker.available_version
     if available && available != VERSION
-      puts "#{GREEN}Update verfügbar: v#{VERSION} → v#{available}#{RESET}"
-      puts "#{DIM}Installieren mit: tsm --update#{RESET}"
+      puts "#{GREEN}Update available: v#{VERSION} → v#{available}#{RESET}"
+      puts "#{DIM}Install with: tsm --update#{RESET}"
     else
-      puts "#{GREEN}Bereits aktuell (v#{VERSION})#{RESET}"
+      puts "#{GREEN}Already up to date (v#{VERSION})#{RESET}"
     end
   end
 end

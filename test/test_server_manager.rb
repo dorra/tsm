@@ -155,6 +155,17 @@ class TestServerManager < TSMTestCase
     assert_equal 1, servers.length
   end
 
+  def test_cleanup_legacy_local_safe_when_no_machine_id_file
+    # No machine-id file exists, MachineId.current returns nil
+    # Should NOT remove legacy entries (nil == nil bug fix)
+    servers = [
+      Server.new(alias_name: 'local', host: nil, user: nil, port: 22, is_main: false, machine_id: nil),
+    ]
+
+    ServerManager.cleanup_legacy_local!(servers)
+    assert_equal 1, servers.length
+  end
+
   # --- main_server ---
 
   def test_main_server_found

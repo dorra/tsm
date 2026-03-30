@@ -33,7 +33,7 @@ class TestRemoteExecutor < TSMTestCase
     )
     cmd = RemoteExecutor.build_ssh_command(server, 'tmux ls')
 
-    assert_includes cmd, '-p 2222'
+    assert_match(/-p '?2222'?/, cmd)
   end
 
   def test_build_ssh_command_includes_path_prefix

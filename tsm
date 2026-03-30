@@ -18,8 +18,18 @@ SERVERS_FILE = File.join(CONFIG_DIR, 'servers')
 SSH_TIMEOUT = 5
 
 require 'securerandom'
-require 'shellwords'
 require 'timeout'
+
+# ─────────────────────────────────────────────────────────────
+# Shell escape helper (inline, avoids require 'shellwords')
+# ─────────────────────────────────────────────────────────────
+
+def shell_escape(str)
+  str = str.to_s
+  return "''" if str.empty?
+  # Wrap in single quotes, escape any embedded single quotes
+  "'" + str.gsub("'", "'\\''") + "'"
+end
 
 # ─────────────────────────────────────────────────────────────
 # Timeout helper (cross-platform, works on macOS without GNU coreutils)
@@ -543,7 +553,7 @@ class TSM
       RemoteExecutor.attach_session(server, session[:name])
     else
       print CLEAR
-      escaped = Shellwords.escape(session[:name])
+      escaped = shell_escape(session[:name])
       if ENV['TMUX']
         exec("tmux switch-client -t #{escaped}")
       else
@@ -592,7 +602,7 @@ class TSM
       if server && !server.local?
         RemoteExecutor.kill_session(server, session[:name])
       else
-        system("tmux kill-session -t #{Shellwords.escape(session[:name])}")
+        system("tmux kill-session -t #{shell_escape(session[:name])}")
       end
       @selected = [@selected - 1, 0].max
       start_async_fetch  # Refresh session list
@@ -617,7 +627,7 @@ class TSM
       if server && !server.local?
         RemoteExecutor.detach_session(server, session[:name])
       else
-        system("tmux detach-client -s #{Shellwords.escape(session[:name])}")
+        system("tmux detach-client -s #{shell_escape(session[:name])}")
       end
       start_async_fetch  # Refresh session list
     end
@@ -1050,8 +1060,8 @@ module RemoteExecutor
 
   def build_ssh_command(server, remote_cmd)
     opts = "-o ConnectTimeout=#{SSH_TIMEOUT} -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
-    port_opt = server.port && server.port != 22 ? "-p #{Shellwords.escape(server.port.to_s)}" : ""
-    target = Shellwords.escape(server.ssh_target)
+    port_opt = server.port && server.port != 22 ? "-p #{shell_escape(server.port.to_s)}" : ""
+    target = shell_escape(server.ssh_target)
 
     # Add common paths to ensure tmux is found (Homebrew, local bin)
     path_prefix = "export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; "
@@ -1067,7 +1077,7 @@ module RemoteExecutor
   end
 
   def detach_session(server, session_name)
-    escaped = Shellwords.escape(session_name)
+    escaped = shell_escape(session_name)
     if server.local?
       system("tmux detach-client -s #{escaped}")
     else
@@ -1077,7 +1087,7 @@ module RemoteExecutor
   end
 
   def kill_session(server, session_name)
-    escaped = Shellwords.escape(session_name)
+    escaped = shell_escape(session_name)
     if server.local?
       system("tmux kill-session -t #{escaped}")
     else
@@ -1087,7 +1097,7 @@ module RemoteExecutor
   end
 
   def create_session(server, session_name)
-    escaped = Shellwords.escape(session_name)
+    escaped = shell_escape(session_name)
     if server.local?
       if ENV['TMUX']
         system("tmux new-session -d -s #{escaped} && tmux switch-client -t #{escaped}")
@@ -1207,7 +1217,7 @@ module RemoteExecutor
 
   def local_attach(session_name)
     print "\e[2J\e[H"
-    escaped = Shellwords.escape(session_name)
+    escaped = shell_escape(session_name)
     if ENV['TMUX']
       exec("tmux switch-client -t #{escaped}")
     else
@@ -1221,7 +1231,7 @@ module RemoteExecutor
     port_opt = server.port && server.port != 22 ? "-p #{server.port}" : ""
     target = server.ssh_target
     path_prefix = "export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; "
-    escaped = Shellwords.escape(session_name)
+    escaped = shell_escape(session_name)
 
     exec("ssh #{opts} #{port_opt} -t #{target} '#{path_prefix}tmux attach -t #{escaped}'")
   end

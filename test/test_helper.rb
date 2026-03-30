@@ -4,11 +4,13 @@ require 'minitest/autorun'
 require 'tmpdir'
 require 'fileutils'
 
-# Override config paths BEFORE loading tsm so tests don't touch ~/.config/tsm
-TEST_TMP_BASE = Dir.mktmpdir('tsm-test')
+# Shared constant override logic
+TSM_TEST_CONSTANTS = %w[
+  CONFIG_DIR CONFIG_FILE LAST_CHECK_FILE AVAILABLE_VERSION_FILE
+  MACHINE_ID_FILE SERVERS_FILE INSTALL_PATH
+].freeze
 
-# Remove constants that will be set by loading tsm, then redefine with test paths
-def self.override_tsm_constants!(tmpdir)
+def self.build_test_paths(tmpdir)
   {
     'CONFIG_DIR'             => File.join(tmpdir, 'config'),
     'CONFIG_FILE'            => File.join(tmpdir, 'config', 'config'),
@@ -17,18 +19,26 @@ def self.override_tsm_constants!(tmpdir)
     'MACHINE_ID_FILE'        => File.join(tmpdir, 'config', 'machine-id'),
     'SERVERS_FILE'           => File.join(tmpdir, 'config', 'servers'),
     'INSTALL_PATH'           => File.join(tmpdir, 'bin', 'tsm'),
-  }.each do |name, value|
+  }
+end
+
+def self.override_tsm_constants!(tmpdir)
+  build_test_paths(tmpdir).each do |name, value|
     Object.send(:remove_const, name) if Object.const_defined?(name)
     Object.const_set(name, value)
   end
 end
 
+TEST_TMP_BASE = Dir.mktmpdir('tsm-test')
+
+# Load tsm with warnings suppressed to avoid constant redefinition noise
 override_tsm_constants!(TEST_TMP_BASE)
-
-# Now load the tsm script (the if __FILE__ == $0 guard prevents execution)
+original_verbose = $VERBOSE
+$VERBOSE = nil
 load File.expand_path('../../tsm', __FILE__)
+$VERBOSE = original_verbose
 
-# Re-override in case loading tsm redefined them (it does, since they're top-level)
+# Re-override since loading tsm redefines the constants
 override_tsm_constants!(TEST_TMP_BASE)
 
 at_exit { FileUtils.rm_rf(TEST_TMP_BASE) }

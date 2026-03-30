@@ -114,17 +114,21 @@ Server = Struct.new(:alias_name, :host, :user, :port, :is_main, :machine_id, key
   end
 end
 
-class TSM
-  CLEAR = "\e[2J\e[H"
-  RESET = "\e[0m"
-  BOLD = "\e[1m"
-  DIM = "\e[2m"
-  GREEN = "\e[32m"
-  YELLOW = "\e[33m"
-  CYAN = "\e[36m"
-  RED = "\e[31m"
-  REVERSE = "\e[7m"
+# ─────────────────────────────────────────────────────────────
+# ANSI Color Constants (shared across TSM, Installer)
+# ─────────────────────────────────────────────────────────────
 
+CLEAR = "\e[2J\e[H"
+RESET = "\e[0m"
+BOLD = "\e[1m"
+DIM = "\e[2m"
+GREEN = "\e[32m"
+YELLOW = "\e[33m"
+CYAN = "\e[36m"
+RED = "\e[31m"
+REVERSE = "\e[7m"
+
+class TSM
   def initialize
     @selected = 0
     @running = true
@@ -229,7 +233,7 @@ class TSM
 
   def check_tmux!
     unless system('which tmux > /dev/null 2>&1')
-      puts "#{RED}Error: tmux nicht gefunden#{RESET}"
+      puts "#{RED}Error: tmux not found#{RESET}"
       exit 1
     end
   end
@@ -1046,8 +1050,8 @@ module RemoteExecutor
 
   def build_ssh_command(server, remote_cmd)
     opts = "-o ConnectTimeout=#{SSH_TIMEOUT} -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
-    port_opt = server.port && server.port != 22 ? "-p #{server.port}" : ""
-    target = server.ssh_target
+    port_opt = server.port && server.port != 22 ? "-p #{Shellwords.escape(server.port.to_s)}" : ""
+    target = Shellwords.escape(server.ssh_target)
 
     # Add common paths to ensure tmux is found (Homebrew, local bin)
     path_prefix = "export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH; "
@@ -1132,8 +1136,6 @@ module RemoteExecutor
     end
   end
 
-  private
-
   def format_age(seconds)
     case seconds
     when 0..59 then "now"
@@ -1142,6 +1144,8 @@ module RemoteExecutor
     else "#{seconds / 86400}d"
     end
   end
+
+  private
 
   def fetch_local_sessions(server)
     format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
@@ -1324,14 +1328,6 @@ end
 
 module Installer
   extend self
-
-  RESET = "\e[0m"
-  BOLD = "\e[1m"
-  DIM = "\e[2m"
-  GREEN = "\e[32m"
-  YELLOW = "\e[33m"
-  CYAN = "\e[36m"
-  RED = "\e[31m"
 
   def installed?
     File.exist?(INSTALL_PATH) && File.executable?(INSTALL_PATH)

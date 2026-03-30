@@ -59,27 +59,27 @@ class TestRemoteExecutor < TSMTestCase
     refute_includes cmd, '@'  # no user@ prefix
   end
 
-  # --- format_age (private, tested via send) ---
+  # --- format_age ---
 
   def test_format_age_now
-    assert_equal 'now', RemoteExecutor.send(:format_age, 0)
-    assert_equal 'now', RemoteExecutor.send(:format_age, 30)
-    assert_equal 'now', RemoteExecutor.send(:format_age, 59)
+    assert_equal 'now', RemoteExecutor.format_age(0)
+    assert_equal 'now', RemoteExecutor.format_age(30)
+    assert_equal 'now', RemoteExecutor.format_age(59)
   end
 
   def test_format_age_minutes
-    assert_equal '1m', RemoteExecutor.send(:format_age, 60)
-    assert_equal '5m', RemoteExecutor.send(:format_age, 300)
-    assert_equal '59m', RemoteExecutor.send(:format_age, 3599)
+    assert_equal '1m', RemoteExecutor.format_age(60)
+    assert_equal '5m', RemoteExecutor.format_age(300)
+    assert_equal '59m', RemoteExecutor.format_age(3599)
   end
 
   def test_format_age_hours
-    assert_equal '1h', RemoteExecutor.send(:format_age, 3600)
-    assert_equal '23h', RemoteExecutor.send(:format_age, 86399)
+    assert_equal '1h', RemoteExecutor.format_age(3600)
+    assert_equal '23h', RemoteExecutor.format_age(86399)
   end
 
   def test_format_age_days
-    assert_equal '1d', RemoteExecutor.send(:format_age, 86400)
-    assert_equal '7d', RemoteExecutor.send(:format_age, 604800)
+    assert_equal '1d', RemoteExecutor.format_age(86400)
+    assert_equal '7d', RemoteExecutor.format_age(604800)
   end
 end

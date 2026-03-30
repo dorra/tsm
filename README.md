@@ -120,14 +120,14 @@ This enables sharing server configurations across machines.
 `tsm --update` updates tsm locally and on all configured remote servers:
 
 ```
-✓ Update erfolgreich!
+✓ Update successful!
   v1.7.8 → v1.7.9
 
 Remote Server Updates
 
   prod... → v1.7.9
-  staging... aktuell
-  offline... fehlgeschlagen
+  staging... up to date
+  offline... failed
 ```
 
 Errors on individual servers don't stop the update process.

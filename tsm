@@ -699,18 +699,18 @@ class TSM
       end
 
       name_padded = server.alias_name.ljust(18)
-      main_tag = server.is_main ? "  #{YELLOW}[main]#{RESET}" : ""
 
-      puts "  #{pointer} #{name_padded}  #{DIM}#{target}#{RESET}#{main_tag}"
+      puts "  #{pointer} #{name_padded}  #{DIM}#{target}#{RESET}"
     end
+
+    puts
+    puts "  #{DIM}sync: #{StorageSync.status_line}#{RESET}"
 
     puts
     help_parts = [
       "#{BOLD}↑↓#{RESET} #{DIM}nav#{RESET}",
       "#{CYAN}a#{RESET}#{DIM}dd#{RESET}",
       "#{BOLD}⌫#{RESET} #{DIM}del#{RESET}",
-      "#{CYAN}m#{RESET}#{DIM}ain#{RESET}",
-      "#{CYAN}s#{RESET}#{DIM}ync#{RESET}",
       "#{CYAN}b#{RESET}#{DIM}ack#{RESET}"
     ]
     puts "  #{help_parts.join('  ')}"
@@ -728,10 +728,6 @@ class TSM
       add_server_dialog
     when "\x7f", "\b" # Backspace
       delete_server_dialog
-    when 'm'
-      set_main_server
-    when 's'
-      sync_servers_dialog
     when 'b', 'q', "\e", "\u0003"
       @server_mode = false
       @selected = 0
@@ -798,53 +794,6 @@ class TSM
       ServerManager.save_servers(@servers)
       push_servers_async
     end
-  end
-
-  def set_main_server
-    server = @servers[@server_selected]
-
-    # Toggle: if already main, unmark it; otherwise mark as main
-    if server.is_main
-      server.is_main = false
-    else
-      @servers.each { |s| s.is_main = false }
-      server.is_main = true
-    end
-
-    ServerManager.save_servers(@servers)
-  end
-
-  def sync_servers_dialog
-    main = ServerManager.main_server(@servers)
-
-    unless main
-      print CLEAR
-      puts "  #{RED}Kein Main-Server konfiguriert#{RESET}\n\n"
-      puts "  #{DIM}Wähle einen Server und drücke 'm' um ihn als Main zu setzen.#{RESET}\n\n"
-      print "  #{DIM}Enter zum Fortfahren...#{RESET}"
-      read_char
-      return
-    end
-
-    print CLEAR
-    puts "  #{BOLD}Sync Server Configuration#{RESET}\n\n"
-    puts "  Main: #{CYAN}#{main.alias_name}#{RESET} (#{main.ssh_target})\n\n"
-    puts "  #{BOLD}p#{RESET} Push local → remote"
-    puts "  #{BOLD}l#{RESET} Pull remote → local"
-    puts "  #{DIM}Esc#{RESET} Cancel\n\n"
-
-    char = read_char
-
-    case char
-    when 'p'
-      push_config_to_main(main)
-    when 'l'
-      pull_config_from_main(main)
-    end
-  end
-
-  def push_config_to_main(main)
-    push_config_to_server(main)
   end
 
   def push_config_to_server(server)
@@ -955,27 +904,6 @@ class TSM
     nil
   end
 
-  def pull_config_from_main(main)
-    cmd = RemoteExecutor.build_ssh_command(main, "cat ~/.config/tsm/servers 2>/dev/null")
-
-    print CLEAR
-    puts "  #{DIM}Pulling config...#{RESET}"
-
-    content = `#{cmd}`
-
-    unless $?.success? && !content.strip.empty?
-      puts "\n  #{RED}Pull failed - no config on remote#{RESET}\n"
-      sleep 1
-      return
-    end
-
-    Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
-    File.write(SERVERS_FILE, content)
-    @servers = ServerManager.load_servers
-
-    puts "\n  #{GREEN}Config pulled from #{main.alias_name}#{RESET}\n"
-    sleep 1
-  end
 end
 
 # ─────────────────────────────────────────────────────────────

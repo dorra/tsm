@@ -89,7 +89,7 @@ module MachineId
 end
 
 # Server configuration struct
-Server = Struct.new(:alias_name, :host, :user, :port, :is_main, :machine_id, keyword_init: true) do
+Server = Struct.new(:alias_name, :host, :user, :port, :machine_id, keyword_init: true) do
   def local?
     # Check machine_id first (primary method)
     if machine_id && !machine_id.empty?
@@ -100,7 +100,7 @@ Server = Struct.new(:alias_name, :host, :user, :port, :is_main, :machine_id, key
   end
 
   def display_name
-    is_main ? "#{alias_name} [main]" : alias_name
+    alias_name
   end
 
   def ssh_target
@@ -109,7 +109,7 @@ Server = Struct.new(:alias_name, :host, :user, :port, :is_main, :machine_id, key
   end
 
   def to_line
-    "#{alias_name}|#{host || ''}|#{user || ''}|#{port || 22}|#{is_main}|#{machine_id || ''}"
+    "#{alias_name}|#{host || ''}|#{user || ''}|#{port || 22}|#{machine_id || ''}"
   end
 end
 
@@ -293,7 +293,6 @@ class TSM
       host: host,
       user: user,
       port: port,
-      is_main: false,
       machine_id: MachineId.current
     )
     @servers << new_server
@@ -711,7 +710,6 @@ class TSM
       host: host,
       user: user,
       port: port,
-      is_main: false,
       machine_id: nil
     )
 
@@ -934,7 +932,6 @@ module ServerManager
     host: nil,
     user: nil,
     port: 22,
-    is_main: false,
     machine_id: nil
   )
 
@@ -949,13 +946,21 @@ module ServerManager
       parts = line.split('|')
       next if parts.length < 2
 
+      # Legacy 6-column format: alias|host|user|port|is_main|machine_id.
+      # New 5-column format has machine_id at index 4. is_main was always
+      # literally 'true'/'false'; machine_ids are UUIDs, so no collision.
+      machine_id = if parts[4] == 'true' || parts[4] == 'false'
+        parts[5]
+      else
+        parts[4]
+      end
+
       servers << Server.new(
         alias_name: parts[0],
         host: parts[1]&.empty? ? nil : parts[1],
         user: parts[2]&.empty? ? nil : parts[2],
         port: (parts[3] || 22).to_i,
-        is_main: parts[4] == 'true',
-        machine_id: parts[5]&.empty? ? nil : parts[5]
+        machine_id: machine_id&.empty? ? nil : machine_id
       )
     end
 
@@ -968,7 +973,7 @@ module ServerManager
     Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
 
     content = "# TSM Server Configuration\n"
-    content += "# Format: alias|host|user|port|is_main|machine_id\n\n"
+    content += "# Format: alias|host|user|port|machine_id\n\n"
 
     servers.each do |s|
       content += "#{s.to_line}\n"
@@ -1015,15 +1020,6 @@ module ServerManager
         false
       end
     end
-    servers
-  end
-
-  def main_server(servers)
-    servers.find(&:is_main)
-  end
-
-  def set_main(servers, alias_name)
-    servers.each { |s| s.is_main = (s.alias_name == alias_name) }
     servers
   end
 

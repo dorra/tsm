@@ -4,7 +4,7 @@
 # TSM - Tmux Session Manager
 # Pure Ruby TUI, zero dependencies
 
-VERSION = '1.10.0'
+VERSION = '1.10.1'
 INSTALL_PATH = File.expand_path('~/.local/bin/tsm')
 CONFIG_DIR = File.expand_path('~/.config/tsm')
 CONFIG_FILE = File.join(CONFIG_DIR, 'config')
@@ -48,6 +48,15 @@ def run_with_timeout(cmd, timeout_secs)
   end
 
   result
+end
+
+def format_age(seconds)
+  case seconds
+  when 0..59 then "now"
+  when 60..3599 then "#{seconds / 60}m"
+  when 3600..86399 then "#{seconds / 3600}h"
+  else "#{seconds / 86400}d"
+  end
 end
 
 # ─────────────────────────────────────────────────────────────
@@ -100,10 +109,6 @@ Server = Struct.new(:alias_name, :host, :user, :port, :machine_id, keyword_init:
     end
     # Fallback for legacy entries
     host.nil? || host.empty? || host == 'localhost'
-  end
-
-  def display_name
-    alias_name
   end
 
   def ssh_target
@@ -163,11 +168,11 @@ class TSM
     start_storage_pull
 
     loop do
+      check_storage_thread
       if @server_mode
         render_server_menu
         handle_server_input
       else
-        check_storage_thread
         check_pending_threads
         @sessions = build_sessions
         render(@sessions)
@@ -175,6 +180,8 @@ class TSM
       end
       break unless @running
     end
+
+    StorageSync.flush
   end
 
   def start_async_fetch
@@ -215,22 +222,36 @@ class TSM
     return unless @storage_thread
     return if @storage_thread.alive?
 
-    result, content = begin
+    result = begin
       @storage_thread.value
     rescue
-      [:error]
+      nil
     end
     @storage_thread = nil
 
     case result
-    when :ok then apply_pulled_config(content)
-    when :not_found then push_servers_async # first machine: seed central copy
+    when String then apply_pulled_config(result)
+    when :not_found then push_servers unless @config_dirty # first machine: seed central copy
     end
   end
 
   def apply_pulled_config(content)
+    # A local edit happened after the pull started - the local state is
+    # newer and already queued for push; drop the stale snapshot.
+    return if @config_dirty
+
     current = File.exist?(SERVERS_FILE) ? File.read(SERVERS_FILE) : ''
-    return if content == current
+    return if content.b == current.b
+
+    # Reject unparseable/empty payloads so a bad body can't wipe the fleet
+    pulled_servers, pulled_removed = ServerManager.parse(content)
+    return if pulled_servers.empty?
+
+    # This machine was removed from the fleet: keep local config, stop syncing
+    if pulled_removed.include?(MachineId.current)
+      StorageSync.mark_removed!
+      return
+    end
 
     self_entry = ServerManager.self_entry(@servers)
     Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
@@ -241,18 +262,19 @@ class TSM
     if self_entry && !ServerManager.self_entry(@servers)
       @servers << self_entry
       ServerManager.save_servers(@servers)
-      push_servers_async
+      push_servers
     end
+
+    # Never lose local operation, even if this machine has no synced entry
+    @servers << ServerManager::DEFAULT_LOCAL.dup unless @servers.any?(&:local?)
 
     @selected = 0
     start_async_fetch
   end
 
-  def push_servers_async
-    return unless StorageSync.configured?
+  def push_servers
     content = File.read(SERVERS_FILE) rescue nil
-    return unless content
-    Thread.new { StorageSync.push(content) }
+    StorageSync.push_async(content)
   end
 
   def build_sessions
@@ -452,7 +474,7 @@ class TSM
 
     @servers.each do |server|
       # Server header
-      label = server.display_name
+      label = server.alias_name
       puts "  #{BOLD}#{CYAN}#{label}#{RESET}"
 
       if @fetch_errors[server.alias_name]
@@ -504,15 +526,6 @@ class TSM
     age_str = age.rjust(5)
 
     puts "  #{pointer} #{status} #{name_display} #{DIM}#{age_str}#{RESET}"
-  end
-
-  def format_age(seconds)
-    case seconds
-    when 0..59 then "now"
-    when 60..3599 then "#{seconds / 60}m"
-    when 3600..86399 then "#{seconds / 3600}h"
-    else "#{seconds / 86400}d"
-    end
   end
 
   def render_help
@@ -588,6 +601,7 @@ class TSM
   def attach_session(session)
     return unless session
 
+    StorageSync.flush # exec replaces the process; don't lose queued pushes
     server = session[:server]
     if server && !server.local?
       RemoteExecutor.attach_session(server, session[:name])
@@ -621,6 +635,7 @@ class TSM
 
     return if name.nil? || name.empty?
 
+    StorageSync.flush # may exec into tmux; don't lose queued pushes
     RemoteExecutor.create_session(server, name)
   end
 
@@ -674,6 +689,7 @@ class TSM
 
   def run_update
     print CLEAR
+    StorageSync.flush
     Installer.update!
     exit 0
   end
@@ -717,7 +733,10 @@ class TSM
   end
 
   def handle_server_input
-    char = read_char
+    # Timeout while the storage pull is pending so its result gets applied
+    char = read_char(@storage_thread ? 0.3 : nil)
+
+    return unless char
 
     case char
     when 'j', "\e[B"
@@ -768,13 +787,20 @@ class TSM
     # Ensure tsm is installed on new server and get machine-id
     ensure_tsm_on_server(new_server)
     remote_id = fetch_remote_machine_id(new_server)
-    new_server.machine_id = remote_id if remote_id
+    if remote_id
+      new_server.machine_id = remote_id
+      # Re-adding a previously removed machine revives it
+      ServerManager.clear_removed(remote_id)
+    end
 
     @servers << new_server
     ServerManager.save_servers(@servers)
-    push_servers_async
+    @config_dirty = true
+    push_servers
 
-    # Hand storage credentials to the new install so it can sync
+    # Hand the new install the current server list and the storage
+    # credentials so it is usable (CLI included) before its first sync
+    push_servers_file_to_server(new_server)
     push_storage_config_to_server(new_server)
   end
 
@@ -789,11 +815,38 @@ class TSM
     print "  #{CYAN}y#{RESET}/#{DIM}n#{RESET}: "
 
     if read_char.downcase == 'y'
-      @servers.delete_at(@server_selected)
+      removed = @servers.delete_at(@server_selected)
+      # Tombstone so the machine can't re-add itself on its next pull
+      ServerManager.mark_removed(removed.machine_id) if removed.machine_id
       @server_selected = [@server_selected - 1, 0].max
       ServerManager.save_servers(@servers)
-      push_servers_async
+      @config_dirty = true
+      push_servers
     end
+  end
+
+  # Copy the current server list to a new install so it works immediately
+  # (TUI without setup prompt, CLI alias resolution) before its first sync.
+  def push_servers_file_to_server(server)
+    return if server.local?
+    return unless File.exist?(SERVERS_FILE)
+
+    local_content = File.read(SERVERS_FILE)
+    escaped = local_content.gsub("'", "'\\\\''")
+
+    cmd = RemoteExecutor.build_ssh_command(server,
+      "mkdir -p ~/.config/tsm && cat > ~/.config/tsm/servers << 'TSMEOF'\n#{escaped}\nTSMEOF")
+
+    print CLEAR
+    puts "  #{DIM}Pushing server list to #{server.alias_name}...#{RESET}"
+
+    if system(cmd)
+      puts "\n  #{GREEN}Server list pushed to #{server.alias_name}#{RESET}\n"
+    else
+      puts "\n  #{RED}Server list push failed#{RESET}\n"
+    end
+
+    sleep 1
   end
 
   # Copy storage credentials so the new install can sync itself.
@@ -801,14 +854,19 @@ class TSM
   def push_storage_config_to_server(server)
     return if server.local?
 
-    cfg = StorageSync.config
-    return unless cfg[:url] && cfg[:token]
+    unless StorageSync.configured?
+      puts "\n  #{YELLOW}No storage configured - #{server.alias_name} will not sync#{RESET}\n"
+      sleep 1
+      return
+    end
 
+    cfg = StorageSync.config
+    # Quoted heredoc: values reach the remote file without shell expansion
+    lines = "storage_url=#{cfg[:url]}\nstorage_token=#{cfg[:token]}".gsub("'", "'\\\\''")
     remote_cmd =
       'mkdir -p ~/.config/tsm && touch ~/.config/tsm/config && ' \
       'grep -v -e ^storage_url= -e ^storage_token= ~/.config/tsm/config > ~/.config/tsm/config.tmp; ' \
-      "echo \"storage_url=#{cfg[:url]}\" >> ~/.config/tsm/config.tmp && " \
-      "echo \"storage_token=#{cfg[:token]}\" >> ~/.config/tsm/config.tmp && " \
+      "cat >> ~/.config/tsm/config.tmp << 'TSMEOF'\n#{lines}\nTSMEOF\n" \
       'mv ~/.config/tsm/config.tmp ~/.config/tsm/config'
 
     print CLEAR
@@ -926,12 +984,22 @@ module ServerManager
     machine_id: nil
   )
 
-  def load_servers
-    return [DEFAULT_LOCAL.dup] unless File.exist?(SERVERS_FILE)
-
+  # Parse servers-file content. Returns [servers, removed_machine_ids].
+  # Tombstone lines ('#removed:<machine_id>') mark machines deleted from the
+  # fleet; entries carrying a tombstoned machine_id are dropped.
+  def parse(content)
     servers = []
-    File.readlines(SERVERS_FILE).each do |line|
+    removed = []
+
+    content.to_s.each_line do |line|
       line = line.strip
+
+      if line.start_with?('#removed:')
+        id = line.split(':', 2)[1].to_s.strip
+        removed << id unless id.empty? || removed.include?(id)
+        next
+      end
+
       next if line.empty? || line.start_with?('#')
 
       parts = line.split('|')
@@ -955,9 +1023,31 @@ module ServerManager
       )
     end
 
+    servers.reject! { |s| s.machine_id && removed.include?(s.machine_id) }
+    [servers, removed]
+  end
+
+  def load_servers
+    return [DEFAULT_LOCAL.dup] unless File.exist?(SERVERS_FILE)
+
+    servers, removed = parse(File.read(SERVERS_FILE))
+    @removed_ids = removed
+
     servers.empty? ? [DEFAULT_LOCAL.dup] : servers
   rescue
     [DEFAULT_LOCAL.dup]
+  end
+
+  def removed_ids
+    @removed_ids ||= []
+  end
+
+  def mark_removed(machine_id)
+    removed_ids << machine_id unless removed_ids.include?(machine_id)
+  end
+
+  def clear_removed(machine_id)
+    removed_ids.delete(machine_id)
   end
 
   def save_servers(servers)
@@ -968,6 +1058,10 @@ module ServerManager
 
     servers.each do |s|
       content += "#{s.to_line}\n"
+    end
+
+    removed_ids.each do |id|
+      content += "#removed:#{id}\n"
     end
 
     File.write(SERVERS_FILE, content)
@@ -1120,15 +1214,6 @@ module RemoteExecutor
   end
 
   private
-
-  def format_age(seconds)
-    case seconds
-    when 0..59 then "now"
-    when 60..3599 then "#{seconds / 60}m"
-    when 3600..86399 then "#{seconds / 3600}h"
-    else "#{seconds / 86400}d"
-    end
-  end
 
   def fetch_local_sessions(server)
     format = '#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}'
@@ -1328,51 +1413,86 @@ module StorageSync
     @config = { url: nil, token: nil }
   end
 
-  # Pull servers file. Returns [:ok, content], [:not_found] or [:error].
+  # Pull servers file. Returns the content String, :not_found or nil on error.
   def pull
-    return [:error] unless configured?
+    return nil unless configured?
 
     presigned = presign('get')
-    return [:not_found] if presigned == :not_found
-    return [:error] unless presigned
+    return :not_found if presigned == :not_found
+    return nil unless presigned.is_a?(String)
 
     status, body = transfer(:get, presigned)
     case status
-    when 200 then mark_synced; [:ok, body]
-    when 404 then [:not_found]
-    else @state ||= :offline; [:error]
+    when 200 then mark_synced; body
+    when 404 then :not_found
+    else @state = :offline unless @state == :auth_failed; nil
     end
   end
 
   # Push servers file. Returns true/false.
   def push(content)
     return false unless configured?
+    return false if removed?
+    return false if content.nil? || content.strip.empty?
 
     presigned = presign('put')
     if presigned == :not_found
       return false unless ensure_bucket
       presigned = presign('put')
     end
-    return false unless presigned && presigned != :not_found
+    return false unless presigned.is_a?(String)
 
     status, _body = transfer(:put, presigned, body: content)
     if status == 200
       mark_synced
       true
     else
-      @state ||= :offline
+      @state = :offline unless @state == :auth_failed
       false
     end
+  end
+
+  # Queue a push without blocking the UI. Pushes are chained on the
+  # previous one so they can never land out of order; flush joins the
+  # chain before the process exits or execs away.
+  def push_async(content)
+    return unless configured?
+    return if removed?
+    return if content.nil? || content.strip.empty?
+
+    prev = @push_worker
+    @push_worker = Thread.new do
+      prev&.join
+      push(content)
+    end
+  end
+
+  # Wait briefly for queued pushes; called before exit/exec.
+  def flush(timeout = 3)
+    @push_worker&.join(timeout)
+  rescue
+    nil
+  end
+
+  # This machine was removed from the fleet (tombstone in central config):
+  # keep working locally, stop syncing.
+  def mark_removed!
+    @state = :removed
+  end
+
+  def removed?
+    @state == :removed
   end
 
   def status_line
     return 'no storage configured' unless configured?
     case @state
     when :synced
-      age = Time.now.to_i - @synced_at
-      age < 60 ? 'synced now' : "synced #{age / 60}m ago"
+      age = Time.now.to_i - (@synced_at || 0)
+      age < 60 ? 'synced now' : "synced #{format_age(age)} ago"
     when :auth_failed then 'auth failed'
     when :offline then 'offline'
+    when :removed then 'removed from fleet'
     else 'not synced yet'
     end
   end
@@ -1380,8 +1500,8 @@ module StorageSync
   private
 
   def mark_synced
-    @state = :synced
     @synced_at = Time.now.to_i
+    @state = :synced
   end
 
   def ensure_bucket
@@ -1409,7 +1529,7 @@ module StorageSync
     when 404
       :not_found
     else
-      @state ||= :offline
+      @state = :offline unless @state == :auth_failed
       nil
     end
   end

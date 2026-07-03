@@ -159,11 +159,15 @@ class TSM
     # Start parallel fetch for all servers
     start_async_fetch
 
+    # Pull shared config from storage (async)
+    start_storage_pull
+
     loop do
       if @server_mode
         render_server_menu
         handle_server_input
       else
+        check_storage_thread
         check_pending_threads
         @sessions = build_sessions
         render(@sessions)
@@ -200,6 +204,55 @@ class TSM
       end
       @pending_threads.delete(alias_name)
     end
+  end
+
+  def start_storage_pull
+    return unless StorageSync.configured?
+    @storage_thread = Thread.new { StorageSync.pull }
+  end
+
+  def check_storage_thread
+    return unless @storage_thread
+    return if @storage_thread.alive?
+
+    result, content = begin
+      @storage_thread.value
+    rescue
+      [:error]
+    end
+    @storage_thread = nil
+
+    case result
+    when :ok then apply_pulled_config(content)
+    when :not_found then push_servers_async # first machine: seed central copy
+    end
+  end
+
+  def apply_pulled_config(content)
+    current = File.exist?(SERVERS_FILE) ? File.read(SERVERS_FILE) : ''
+    return if content == current
+
+    self_entry = ServerManager.self_entry(@servers)
+    Dir.mkdir(CONFIG_DIR) unless Dir.exist?(CONFIG_DIR)
+    File.write(SERVERS_FILE, content)
+    @servers = ServerManager.load_servers
+
+    # Central list doesn't know this machine yet - re-add and share
+    if self_entry && !ServerManager.self_entry(@servers)
+      @servers << self_entry
+      ServerManager.save_servers(@servers)
+      push_servers_async
+    end
+
+    @selected = 0
+    start_async_fetch
+  end
+
+  def push_servers_async
+    return unless StorageSync.configured?
+    content = File.read(SERVERS_FILE) rescue nil
+    return unless content
+    Thread.new { StorageSync.push(content) }
   end
 
   def build_sessions
@@ -482,7 +535,7 @@ class TSM
 
   def handle_input(sessions)
     # Use timeout if still loading, so UI can refresh
-    timeout = @pending_threads.any? ? 0.3 : nil
+    timeout = (@pending_threads.any? || @storage_thread) ? 0.3 : nil
     char = read_char(timeout)
 
     return unless char  # No input, just refresh
@@ -723,6 +776,7 @@ class TSM
 
     @servers << new_server
     ServerManager.save_servers(@servers)
+    push_servers_async
 
     # Push config to new server
     push_config_to_server(new_server)
@@ -742,6 +796,7 @@ class TSM
       @servers.delete_at(@server_selected)
       @server_selected = [@server_selected - 1, 0].max
       ServerManager.save_servers(@servers)
+      push_servers_async
     end
   end
 

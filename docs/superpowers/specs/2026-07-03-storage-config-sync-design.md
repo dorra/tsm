@@ -96,7 +96,12 @@ Jede lokale Änderung der Server-Liste pusht sofort die komplette Datei:
 
 - Server hinzufügen (`add_server_dialog`)
 - Server entfernen (`delete_server_dialog`)
-- `ensure_self_entry!` / Claim / Migration, wenn sie die Datei verändert haben
+
+Startup-Normalisierungen (`ensure_self_entry!`, Claim, machine_id-Migration)
+pushen nicht selbst: sie laufen vor dem Pull, ein Push dort würde bei
+Last-Write-Wins einen evtl. neueren zentralen Stand mit lokalem Alt-Stand
+überschreiben. Stattdessen ergänzt `apply_pulled_config` nach dem Pull bei
+Bedarf den eigenen Eintrag und pusht dann.
 
 Last-Write-Wins: die zuletzt pushende Maschine überschreibt den zentralen
 Stand vollständig. Parallele Änderungen auf zwei Maschinen können sich

@@ -9,7 +9,7 @@ Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
   ❯ ● project-a                   now
     ○ dotfiles                     3d
 
-  prod [main]
+  prod
     ● api-workers                  5m
 
   ↑↓ nav  attach  new  detach  ⌫ del  config  quit
@@ -21,7 +21,7 @@ Minimal TUI for tmux session management. Pure Ruby, zero dependencies.
 - Create, attach, delete sessions
 - Visual indicators for attached sessions
 - **Multi-server support** - manage sessions across SSH servers
-- **Server configuration sync** - bidirectional sync with main server
+- **Server configuration sync** - automatic via a central storage service
 - Auto-update check (once per day)
 - Self-installing with shell config
 
@@ -90,8 +90,6 @@ tsm --help          Show help
 | `k` / `↑` | Move up |
 | `a` | Add server |
 | `Backspace` | Remove server |
-| `m` | Set as main server |
-| `s` | Sync config with main |
 | `b` | Back |
 
 ## Server Configuration
@@ -101,19 +99,29 @@ When adding a new server, tsm is automatically installed on it and receives the 
 Servers are stored in `~/.config/tsm/servers`:
 
 ```
-# alias|host|user|port|is_main
-local|||22|false
-prod|prod.example.com|deploy|22|true
-staging|staging.example.com|deploy|2222|false
+# alias|host|user|port|machine_id
+laptop|laptop.example.com|deploy|22|a5ed2efe-b7e0-4e8b-8728-2f1162fe227c
+prod|prod.example.com|deploy|22|0cfd1ae9-6f9a-4679-9f31-6e4cfc8e948e
+staging|staging.example.com|deploy|2222|
 ```
+
+Each machine identifies its own entry via its machine-id
+(`~/.config/tsm/machine-id`). Old 6-column files (with an `is_main` column)
+are migrated automatically.
 
 ### Sync
 
-With a main server set, use `y` in server management to:
-- **Push** local config to main server
-- **Pull** config from main server
+With `storage_url` and `storage_token` configured (see below), the server
+list syncs automatically across all installations:
 
-This enables sharing server configurations across machines.
+- On TUI start, tsm pulls the shared list from the storage service.
+- Every change (add/remove server) pushes the list immediately.
+- Last write wins; sync failures never block the TUI.
+
+Without those keys, tsm simply runs locally. The current sync state is shown
+in the server config view (`c`). When you add a new server, tsm installs
+itself there and hands over the storage credentials, so the new machine
+joins the sync automatically.
 
 ### Update
 
@@ -138,7 +146,13 @@ Optional config file: `~/.config/tsm/config`
 
 ```
 update_url=https://raw.githubusercontent.com/dorra/tsm/main/tsm
+storage_url=https://storage.example.com
+storage_token=tnt_...
 ```
+
+`storage_url`/`storage_token` point to a
+[storage-for-agents](https://github.com/dorra/storage-for-agents) instance
+and enable automatic config sync across machines.
 
 ## Troubleshooting
 

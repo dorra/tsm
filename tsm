@@ -774,8 +774,8 @@ class TSM
     ServerManager.save_servers(@servers)
     push_servers_async
 
-    # Push config to new server
-    push_config_to_server(new_server)
+    # Hand storage credentials to the new install so it can sync
+    push_storage_config_to_server(new_server)
   end
 
   def delete_server_dialog
@@ -796,23 +796,28 @@ class TSM
     end
   end
 
-  def push_config_to_server(server)
+  # Copy storage credentials so the new install can sync itself.
+  # Only touches storage_url/storage_token; other config keys survive.
+  def push_storage_config_to_server(server)
     return if server.local?
-    return unless File.exist?(SERVERS_FILE)
 
-    local_content = File.read(SERVERS_FILE)
-    escaped = local_content.gsub("'", "'\\\\''")
+    cfg = StorageSync.config
+    return unless cfg[:url] && cfg[:token]
 
-    cmd = RemoteExecutor.build_ssh_command(server,
-      "mkdir -p ~/.config/tsm && cat > ~/.config/tsm/servers << 'TSMEOF'\n#{escaped}\nTSMEOF")
+    remote_cmd =
+      'mkdir -p ~/.config/tsm && touch ~/.config/tsm/config && ' \
+      'grep -v -e ^storage_url= -e ^storage_token= ~/.config/tsm/config > ~/.config/tsm/config.tmp; ' \
+      "echo \"storage_url=#{cfg[:url]}\" >> ~/.config/tsm/config.tmp && " \
+      "echo \"storage_token=#{cfg[:token]}\" >> ~/.config/tsm/config.tmp && " \
+      'mv ~/.config/tsm/config.tmp ~/.config/tsm/config'
 
     print CLEAR
-    puts "  #{DIM}Pushing config to #{server.alias_name}...#{RESET}"
+    puts "  #{DIM}Pushing storage credentials to #{server.alias_name}...#{RESET}"
 
-    if system(cmd)
-      puts "\n  #{GREEN}Config pushed to #{server.alias_name}#{RESET}\n"
+    if system(RemoteExecutor.build_ssh_command(server, remote_cmd))
+      puts "\n  #{GREEN}Credentials pushed to #{server.alias_name}#{RESET}\n"
     else
-      puts "\n  #{RED}Push failed#{RESET}\n"
+      puts "\n  #{RED}Credential push failed#{RESET}\n"
     end
 
     sleep 1

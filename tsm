@@ -16,6 +16,9 @@ UPDATE_URL_DEFAULT = 'https://raw.githubusercontent.com/dorra/tsm/main/tsm'
 UPDATE_CHECK_INTERVAL = 86400 # 24 hours in seconds
 SERVERS_FILE = File.join(CONFIG_DIR, 'servers')
 SSH_TIMEOUT = 5
+STORAGE_TIMEOUT = 5
+STORAGE_BUCKET = 'tsm'
+STORAGE_KEY = 'servers'
 
 require 'securerandom'
 require 'timeout'
@@ -1309,6 +1312,164 @@ module UpdateChecker
     UPDATE_URL_DEFAULT
   rescue
     UPDATE_URL_DEFAULT
+  end
+end
+
+# ─────────────────────────────────────────────────────────────
+# Storage Sync (config sync via storage-for-agents)
+# ─────────────────────────────────────────────────────────────
+
+module StorageSync
+  extend self
+
+  def configured?
+    c = config
+    !!(c[:url] && c[:token])
+  end
+
+  def config
+    return @config if @config
+    url = token = nil
+    if File.exist?(CONFIG_FILE)
+      content = File.read(CONFIG_FILE)
+      url = content[/^storage_url=(.+)$/, 1]&.strip
+      token = content[/^storage_token=(.+)$/, 1]&.strip
+    end
+    @config = { url: url, token: token }
+  rescue
+    @config = { url: nil, token: nil }
+  end
+
+  # Pull servers file. Returns [:ok, content], [:not_found] or [:error].
+  def pull
+    return [:error] unless configured?
+
+    presigned = presign('get')
+    return [:not_found] if presigned == :not_found
+    return [:error] unless presigned
+
+    status, body = transfer(:get, presigned)
+    case status
+    when 200 then mark_synced; [:ok, body]
+    when 404 then [:not_found]
+    else @state ||= :offline; [:error]
+    end
+  end
+
+  # Push servers file. Returns true/false.
+  def push(content)
+    return false unless configured?
+
+    presigned = presign('put')
+    if presigned == :not_found
+      return false unless ensure_bucket
+      presigned = presign('put')
+    end
+    return false unless presigned && presigned != :not_found
+
+    status, _body = transfer(:put, presigned, body: content)
+    if status == 200
+      mark_synced
+      true
+    else
+      @state ||= :offline
+      false
+    end
+  end
+
+  def status_line
+    return 'no storage configured' unless configured?
+    case @state
+    when :synced
+      age = Time.now.to_i - @synced_at
+      age < 60 ? 'synced now' : "synced #{age / 60}m ago"
+    when :auth_failed then 'auth failed'
+    when :offline then 'offline'
+    else 'not synced yet'
+    end
+  end
+
+  private
+
+  def mark_synced
+    @state = :synced
+    @synced_at = Time.now.to_i
+  end
+
+  def ensure_bucket
+    res = api_request(:put, "/api/buckets/#{STORAGE_BUCKET}")
+    !res.nil? && [200, 201].include?(res.code.to_i)
+  end
+
+  # Returns presigned url (String), :not_found, or nil on error.
+  def presign(op)
+    require 'json'
+    body = { op: op, key: STORAGE_KEY }
+    body[:content_type] = 'text/plain' if op == 'put'
+    res = api_request(:post, "/api/buckets/#{STORAGE_BUCKET}/objects/presign",
+                      body: JSON.generate(body))
+    return nil unless res
+
+    case res.code.to_i
+    when 200, 201
+      url = JSON.parse(res.body)['url'] rescue nil
+      return nil unless url
+      url.start_with?('/') ? "#{config[:url]}#{url}" : url
+    when 401, 403
+      @state = :auth_failed
+      nil
+    when 404
+      :not_found
+    else
+      @state ||= :offline
+      nil
+    end
+  end
+
+  def api_request(method, path, body: nil)
+    require 'net/http'
+    require 'uri'
+
+    uri = URI.parse("#{config[:url]}#{path}")
+    req = method == :put ? Net::HTTP::Put.new(uri.request_uri) : Net::HTTP::Post.new(uri.request_uri)
+    req['Authorization'] = "Bearer #{config[:token]}"
+    if body
+      req['Content-Type'] = 'application/json'
+      req.body = body
+    end
+    http_start(uri) { |http| http.request(req) }
+  rescue
+    @state = :offline
+    nil
+  end
+
+  # Returns [status_code, body] or [nil, nil] on network error.
+  def transfer(method, url, body: nil)
+    require 'net/http'
+    require 'uri'
+
+    uri = URI.parse(url)
+    req = if method == :put
+      r = Net::HTTP::Put.new(uri.request_uri)
+      r['Content-Type'] = 'text/plain'
+      r.body = body
+      r
+    else
+      Net::HTTP::Get.new(uri.request_uri)
+    end
+    res = http_start(uri) { |http| http.request(req) }
+    [res.code.to_i, res.body]
+  rescue
+    @state = :offline
+    [nil, nil]
+  end
+
+  def http_start(uri)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = uri.scheme == 'https'
+    http.open_timeout = STORAGE_TIMEOUT
+    http.read_timeout = STORAGE_TIMEOUT
+    yield http
   end
 end
 

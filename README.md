@@ -120,8 +120,13 @@ list syncs automatically across all installations:
 
 Without those keys, tsm simply runs locally. The current sync state is shown
 in the server config view (`c`). When you add a new server, tsm installs
-itself there and hands over the storage credentials, so the new machine
-joins the sync automatically.
+itself there and hands over the server list and storage credentials, so the
+new machine joins the sync automatically.
+
+Removing a server writes a tombstone (`#removed:<machine_id>`), so the
+removed machine cannot re-add itself: on its next start it shows
+`removed from fleet` and keeps working locally without syncing. Adding it
+again from another machine revives it.
 
 ### Update
 
